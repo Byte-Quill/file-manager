@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, List, Optional, Set, Tuple
@@ -106,6 +107,23 @@ CATEGORIES: Tuple[Category, ...] = (
 PROTECTED_DIRS = frozenset({".git", ".svn", ".hg"})
 
 
+# Pre-compile fnmatch patterns to regex for faster matching
+def _compile_patterns(patterns: Tuple[str, ...]) -> List[re.Pattern]:
+    """Convert fnmatch patterns to compiled regex (case-insensitive)."""
+    return [re.compile(fnmatch.translate(p), re.IGNORECASE) for p in patterns]
+
+
+# Pre-compiled pattern regexes for each category
+_FILE_PATTERN_REGEX: dict[str, List[re.Pattern]] = {}
+_DIR_PATTERN_REGEX: dict[str, List[re.Pattern]] = {}
+
+for cat in CATEGORIES:
+    if cat.file_patterns:
+        _FILE_PATTERN_REGEX[cat.key] = _compile_patterns(cat.file_patterns)
+    if cat.dir_patterns:
+        _DIR_PATTERN_REGEX[cat.key] = _compile_patterns(cat.dir_patterns)
+
+
 # --------------------------------------------------------------------------- #
 # Result model
 # --------------------------------------------------------------------------- #
@@ -192,85 +210,113 @@ def scan_for_temp_files(
     def match_file(name: str):
         low = name.lower()
         for cat in file_cats:
-            for pat in cat.file_patterns:
-                if fnmatch.fnmatch(low, pat):
-                    return cat, pat
+            for regex in _FILE_PATTERN_REGEX.get(cat.key, []):
+                if regex.match(low):
+                    return cat, cat.file_patterns[_FILE_PATTERN_REGEX[cat.key].index(regex)]
         return None
 
     def match_dir(name: str):
         low = name.lower()
         for cat in dir_cats:
-            for pat in cat.dir_patterns:
-                if fnmatch.fnmatch(low, pat):
-                    return cat, pat
+            for regex in _DIR_PATTERN_REGEX.get(cat.key, []):
+                if regex.match(low):
+                    return cat, cat.dir_patterns[_DIR_PATTERN_REGEX[cat.key].index(regex)]
         return None
 
-    for dirpath, dirnames, filenames in os.walk(str(root), topdown=True,
-                                                followlinks=False):
+    def walk(directory: Path) -> None:
+        nonlocal scanned
         if should_cancel is not None and should_cancel():
-            break
-        dp = Path(dirpath)
+            return
 
-        # Never descend into version-control metadata.
-        dirnames[:] = [d for d in dirnames if d not in PROTECTED_DIRS]
+        try:
+            with os.scandir(directory) as it:
+                entries = list(it)
+        except (PermissionError, OSError):
+            return
 
-        keep: List[str] = []
-        for d in dirnames:
-            child = dp / d
-            try:
-                if child.is_symlink():
-                    continue  # never follow or report symlinks
-            except OSError:
+        # Separate dirs and files for processing order
+        dir_entries = []
+        file_entries = []
+        for entry in entries:
+            if entry.is_dir(follow_symlinks=False):
+                dir_entries.append(entry)
+            else:
+                file_entries.append(entry)
+
+        # Process directories first
+        for entry in dir_entries:
+            if should_cancel is not None and should_cancel():
+                return
+
+            name = entry.name
+            child_path = Path(entry.path)
+
+            # Skip protected dirs
+            if name in PROTECTED_DIRS:
                 continue
 
-            hit = match_dir(d)
+            # Skip symlinks
+            if entry.is_symlink():
+                continue
+
+            # Check if directory matches a pattern
+            hit = match_dir(name)
             if hit:
                 cat, pat = hit
                 matches.append(TempMatch(
-                    path=child, category=cat.key, label=cat.label,
-                    reason=pat, is_dir=True, size=_safe_folder_size(child)))
+                    path=child_path, category=cat.key, label=cat.label,
+                    reason=pat, is_dir=True, size=_safe_folder_size(child_path)))
                 continue  # prune: reported once, not descended into
 
+            # Check for empty directories
             if empty_cat is not None:
                 try:
-                    if not any(child.iterdir()):
-                        matches.append(TempMatch(
-                            path=child, category=empty_cat.key,
-                            label=empty_cat.label, reason="empty folder",
-                            is_dir=True, size=0))
-                        continue  # nothing inside to scan
+                    # Quick check: try to read one entry
+                    with os.scandir(child_path) as it:
+                        if not any(True for _ in it):
+                            matches.append(TempMatch(
+                                path=child_path, category=empty_cat.key,
+                                label=empty_cat.label, reason="empty folder",
+                                is_dir=True, size=0))
+                            continue  # nothing inside to scan
                 except OSError:
                     pass
 
-            if d.startswith(".") and not include_hidden:
-                continue  # skip descending into hidden folders
-            keep.append(d)
-        dirnames[:] = keep
-
-        for f in filenames:
-            child = dp / f
-            try:
-                if child.is_symlink():
-                    continue
-            except OSError:
+            # Skip hidden directories if not included
+            if name.startswith(".") and not include_hidden:
                 continue
-            hit = match_file(f)
+
+            # Recurse into subdirectory
+            if recursive:
+                walk(child_path)
+
+        # Process files
+        for entry in file_entries:
+            if should_cancel is not None and should_cancel():
+                return
+
+            name = entry.name
+            child_path = Path(entry.path)
+
+            # Skip symlinks
+            if entry.is_symlink():
+                continue
+
+            hit = match_file(name)
             if hit:
                 cat, pat = hit
                 try:
-                    size = child.stat().st_size
+                    size = entry.stat().st_size
                 except OSError:
                     size = 0
                 matches.append(TempMatch(
-                    path=child, category=cat.key, label=cat.label,
+                    path=child_path, category=cat.key, label=cat.label,
                     reason=pat, is_dir=False, size=size))
 
-        scanned += len(filenames) + len(dirnames)
+        scanned += len(dir_entries) + len(file_entries)
         if progress is not None:
-            progress(scanned, dirpath)
+            progress(scanned, str(directory))
 
-        if not recursive:
-            dirnames[:] = []  # only inspect the top level
-
+    walk(root)
     matches.sort(key=lambda m: (str(m.path.parent), m.path.name.lower()))
     return matches

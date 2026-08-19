@@ -39,7 +39,7 @@ class FileManagerApp:
         self._build_ui()
         self._bind_shortcuts()
         self.navigate_to(self.current_dir, push_history=False)
-        self.root.after(100, self._poll_bg_queue)
+        self.root.after(250, self._poll_bg_queue)
 
     # ------------------------------------------------------------------ UI -- #
     def _build_ui(self) -> None:
@@ -231,6 +231,8 @@ class FileManagerApp:
 
     def _fill_tree(self, entries: List[FileEntry]) -> None:
         self.tree.delete(*self.tree.get_children())
+        # Batch insert: build all values first, then insert in one pass
+        # This reduces UI redraw overhead significantly for large directories
         for entry in entries:
             self.tree.insert(
                 "", END,

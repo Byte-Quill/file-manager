@@ -35,7 +35,7 @@ class CleanerDialog(ttk.Toplevel):
 
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-        self.after(100, self._poll_queue)
+        self.after(250, self._poll_queue)
 
     # ------------------------------------------------------------------ UI -- #
     def _build_ui(self) -> None:

@@ -13,13 +13,18 @@ from .models import human_size
 def folder_size(path: Path) -> int:
     """Return the total size in bytes of everything under *path*."""
     total = 0
-    for dirpath, _dirnames, filenames in os.walk(path):
-        for f in filenames:
-            fp = os.path.join(dirpath, f)
-            try:
-                total += os.path.getsize(fp)
-            except OSError:
-                pass
+    try:
+        with os.scandir(path) as it:
+            for entry in it:
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        total += folder_size(Path(entry.path))
+                    else:
+                        total += entry.stat().st_size
+                except OSError:
+                    pass
+    except OSError:
+        pass
     return total
 
 

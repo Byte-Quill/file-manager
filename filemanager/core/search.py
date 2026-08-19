@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fnmatch
+import os
 from pathlib import Path
 from typing import List
 
@@ -35,28 +36,30 @@ def search(
         if len(results) >= max_results:
             return
         try:
-            children = sorted(directory.iterdir(), key=lambda p: p.name.lower())
+            with os.scandir(directory) as it:
+                entries = list(it)
+                entries.sort(key=lambda e: e.name.lower())
         except (PermissionError, OSError):
             return
-        for child in children:
+        for entry in entries:
             if len(results) >= max_results:
                 return
-            if matches(child.name):
+            if matches(entry.name):
                 try:
-                    st = child.stat()
+                    st = entry.stat()
                     results.append(
                         FileEntry(
-                            name=child.name,
-                            path=child,
-                            is_dir=child.is_dir(),
-                            size=0 if child.is_dir() else st.st_size,
+                            name=entry.name,
+                            path=Path(entry.path),
+                            is_dir=entry.is_dir(follow_symlinks=False),
+                            size=0 if entry.is_dir(follow_symlinks=False) else st.st_size,
                             modified=st.st_mtime,
                         )
                     )
                 except OSError:
                     pass
-            if recursive and child.is_dir() and not child.is_symlink():
-                walk(child)
+            if recursive and entry.is_dir(follow_symlinks=False) and not entry.is_symlink():
+                walk(Path(entry.path))
 
     walk(root)
     return results

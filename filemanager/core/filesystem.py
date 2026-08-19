@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import List
 
@@ -18,24 +19,27 @@ def list_directory(path: Path, show_hidden: bool = False) -> List[FileEntry]:
 
     entries: List[FileEntry] = []
     try:
-        for child in path.iterdir():
-            name = child.name
-            if not show_hidden and name.startswith("."):
-                continue
-            try:
-                st = child.stat()
-                entries.append(
-                    FileEntry(
-                        name=name,
-                        path=child,
-                        is_dir=child.is_dir(),
-                        size=0 if child.is_dir() else st.st_size,
-                        modified=st.st_mtime,
+        with os.scandir(path) as it:
+            for entry in it:
+                name = entry.name
+                if not show_hidden and name.startswith("."):
+                    continue
+                try:
+                    # DirEntry caches stat() results; no extra syscall
+                    is_dir = entry.is_dir(follow_symlinks=False)
+                    st = entry.stat()
+                    entries.append(
+                        FileEntry(
+                            name=name,
+                            path=Path(entry.path),
+                            is_dir=is_dir,
+                            size=0 if is_dir else st.st_size,
+                            modified=st.st_mtime,
+                        )
                     )
-                )
-            except OSError:
-                # Broken symlink or permission problem — still show it.
-                entries.append(FileEntry(name=name, path=child, is_dir=False))
+                except OSError:
+                    # Broken symlink or permission problem — still show it.
+                    entries.append(FileEntry(name=name, path=Path(entry.path), is_dir=False))
     except PermissionError:
         raise FileOperationError(f"Permission denied:\n{path}")
     except OSError as exc:

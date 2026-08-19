@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import ttkbootstrap as ttk
-
-from .gui import FileManagerApp
 
 #: ttkbootstrap theme used for the whole application.
 THEME = "darkly"
@@ -12,6 +9,10 @@ THEME = "darkly"
 
 def run() -> None:
     """Create the main window and run the Tk event loop."""
+    import ttkbootstrap as ttk  # deferred import for faster startup
+
+    from .gui import FileManagerApp
+
     root = ttk.Window(themename=THEME)
     FileManagerApp(root)
     root.mainloop()
