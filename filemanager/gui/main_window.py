@@ -393,6 +393,9 @@ class FileManagerApp:
 
     def _goto_history(self) -> None:
         path = self.history[self.history_index]
+        if not path.is_dir():
+            self._error(FileOperationError(f"Folder no longer exists:\n{path}"))
+            return
         self.current_dir = path
         self.search_mode = False
         self.path_var.set(str(path))
