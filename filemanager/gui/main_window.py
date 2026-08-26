@@ -15,6 +15,7 @@ from ttkbootstrap.dialogs import Messagebox
 
 from .. import core
 from ..core import FileEntry, FileOperationError
+from ..core.models import human_size
 from ..core.search import MAX_RESULTS as SEARCH_MAX_RESULTS
 from .dialogs import ask_string
 from .icons import icon_for
@@ -44,10 +45,18 @@ class FileManagerApp:
         self._action_buttons: List[ttk.Button] = []
         self._typeahead = ""
         self._typeahead_time = 0.0
+        self._size_token = 0
+        self._preview_after: Optional[str] = None
+        self._sort_col: Optional[str] = None
+        self.folder_sizes_var = ttk.BooleanVar(value=True)
+        self._settings = core.settings.load()
 
+        self._apply_saved_state()
         self._build_ui()
         self._bind_shortcuts()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.navigate_to(self.current_dir, push_history=False)
+        self._restore_sort()
         self.root.after(250, self._poll_bg_queue)
 
     # ------------------------------------------------------------------ UI -- #
@@ -114,6 +123,13 @@ class FileManagerApp:
         ttk.Checkbutton(actions, text="Show hidden files", variable=self.show_hidden,
                         command=self.refresh, bootstyle="round-toggle",
                         takefocus=False).pack(side=RIGHT)
+        ttk.Checkbutton(actions, text="Folder sizes", variable=self.folder_sizes_var,
+                        command=self._start_folder_sizes, bootstyle="round-toggle",
+                        takefocus=False).pack(side=RIGHT, padx=(0, 12))
+        self.show_preview = ttk.BooleanVar(value=True)
+        ttk.Checkbutton(actions, text="Preview", variable=self.show_preview,
+                        command=self._toggle_preview, bootstyle="round-toggle",
+                        takefocus=False).pack(side=RIGHT, padx=(0, 12))
 
         # ---- Main pane: sidebar + file list ------------------------------- #
         pane = ttk.Panedwindow(self.root, orient=HORIZONTAL)
@@ -155,6 +171,7 @@ class FileManagerApp:
         self.tree.bind("<Button-3>", self._on_context_menu)
         self.tree.bind("<Control-Button-1>", self._on_context_menu)
         self.tree.bind("<Key>", self._on_tree_key)
+        self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
         if sys.platform == "darwin":
             # On macOS Button-2 is right-click; on Linux it is middle-click.
             self.tree.bind("<Button-2>", self._on_context_menu)
@@ -166,6 +183,13 @@ class FileManagerApp:
         status = ttk.Label(self.root, textvariable=self.status_var, anchor=W,
                            padding=(10, 4), bootstyle="inverse-secondary")
         status.pack(fill=X, side=BOTTOM)
+
+        # ---- Preview panel (packed above the status bar) ------------------- #
+        self.preview_var = ttk.StringVar(value="")
+        self.preview_frame = ttk.Labelframe(self.root, text="Preview", padding=6)
+        ttk.Label(self.preview_frame, textvariable=self.preview_var,
+                  justify=LEFT, wraplength=1100, anchor=W).pack(fill=X)
+        self.preview_frame.pack(fill=X, side=BOTTOM, padx=8, pady=(0, 4))
 
     def _build_context_menu(self) -> None:
         self.menu = ttk.Menu(self.root, tearoff=False)
@@ -199,6 +223,13 @@ class FileManagerApp:
             elif loc == Path("/"):
                 label = "💽 Computer"
             self.sidebar.insert("", END, text=f"  {label}", values=(str(loc),))
+        recents = [Path(p) for p in self._settings.get("recent_dirs", [])
+                   if Path(p).is_dir()]
+        if recents:
+            self.sidebar.insert("", END, text="  ── Recent ──", values=("",))
+            for loc in recents:
+                self.sidebar.insert("", END, text=f"  🕘 {loc.name}",
+                                    values=(str(loc),))
 
     # ------------------------------------------------------------- shortcuts #
     def _bind_shortcuts(self) -> None:
@@ -243,9 +274,21 @@ class FileManagerApp:
             self.history = self.history[: self.history_index + 1]
             self.history.append(path)
             self.history_index = len(self.history) - 1
+        self._add_recent(path)
         self.path_var.set(str(path))
         self._update_breadcrumbs()
         self.refresh()
+
+    def _add_recent(self, path: Path) -> None:
+        """Remember the folder in the persisted recent list (max 8)."""
+        recents = self._settings.get("recent_dirs", [])
+        s = str(path)
+        if s in recents:
+            recents.remove(s)
+        recents.insert(0, s)
+        self._settings["recent_dirs"] = recents[:8]
+        core.settings.save(self._settings)
+        self._populate_sidebar()
 
     def _update_breadcrumbs(self) -> None:
         """Rebuild the clickable path segment bar for the current folder."""
@@ -272,10 +315,33 @@ class FileManagerApp:
             self._error(exc)
             return
         self._fill_tree(entries)
+        self._start_folder_sizes()
         n_dirs = sum(1 for e in entries if e.is_dir)
         n_files = len(entries) - n_dirs
         self.status_var.set(f"{self.current_dir}   —   {n_dirs} folder(s), {n_files} file(s)")
         self._update_nav_buttons()
+
+    def _start_folder_sizes(self) -> None:
+        """Compute folder sizes in the background and fill them in lazily."""
+        if not self.folder_sizes_var.get():
+            return
+        dirs = [(iid, self.tree.item(iid, "tags")[0])
+                for iid in self.tree.get_children()
+                if self.tree.item(iid, "tags")[1] == "dir"]
+        if not dirs:
+            return
+        self._size_token += 1
+        token = self._size_token
+
+        def worker() -> None:
+            for iid, path in dirs:
+                try:
+                    size = core.folder_size(Path(path))
+                except Exception:
+                    size = 0
+                self.bg_queue.put(("dir-size", token, iid, size))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _fill_tree(self, entries: List[FileEntry]) -> None:
         self.tree.delete(*self.tree.get_children())
@@ -328,6 +394,8 @@ class FileManagerApp:
         if not sel:
             return
         path = self.sidebar.item(sel[0], "values")[0]
+        if not path:  # section separator row
+            return
         self.navigate_to(Path(path))
 
     def _on_double_click(self, _event=None) -> None:
@@ -464,6 +532,15 @@ class FileManagerApp:
                     self._set_busy(False)
                     self.refresh()
                     self._error(item[1])
+                elif kind == "dir-size":
+                    _, token, iid, size = item
+                    if token != self._size_token or not self.tree.exists(iid):
+                        continue  # stale update from a previous listing
+                    tags = list(self.tree.item(iid, "tags"))
+                    tags[2] = str(size)
+                    values = self.tree.item(iid, "values")
+                    self.tree.item(iid, tags=tuple(tags),
+                                   values=(values[0], human_size(size), values[2]))
         except queue.Empty:
             pass
         self.root.after(100, self._poll_bg_queue)
@@ -692,6 +769,12 @@ class FileManagerApp:
     _HEADINGS = {"name": "Name", "size": "Size", "modified": "Modified"}
 
     def _sort_column(self, col: str) -> None:
+        reverse = self._sort_reverse.get(col, False)
+        self._apply_sort(col, reverse)
+        self._sort_reverse[col] = not reverse
+        self._sort_col = col
+
+    def _apply_sort(self, col: str, reverse: bool) -> None:
         def key(iid: str):
             tags = self.tree.item(iid, "tags")
             if col == "size":
@@ -701,11 +784,9 @@ class FileManagerApp:
                 return float(tags[3])
             return self.tree.set(iid, col).lower()
 
-        reverse = self._sort_reverse.get(col, False)
         for index, iid in enumerate(
                 sorted(self.tree.get_children(), key=key, reverse=reverse)):
             self.tree.move(iid, "", index)
-        self._sort_reverse[col] = not reverse
         # Show a direction arrow on the active heading only.
         for c, text in self._HEADINGS.items():
             if c == col:
@@ -729,6 +810,88 @@ class FileManagerApp:
                 self.tree.selection_set(iid)
                 self.tree.see(iid)
                 break
+
+    # -------------------------------------------------------------- preview -- #
+    def _toggle_preview(self) -> None:
+        if self.show_preview.get():
+            self.preview_frame.pack(fill=X, side=BOTTOM, padx=8, pady=(0, 4))
+            self._update_preview()
+        else:
+            self.preview_frame.pack_forget()
+
+    def _on_tree_select(self, _event=None) -> None:
+        # Debounce: fast arrow-key navigation should not thrash the disk.
+        if self._preview_after:
+            self.root.after_cancel(self._preview_after)
+        self._preview_after = self.root.after(200, self._update_preview)
+
+    def _update_preview(self) -> None:
+        self._preview_after = None
+        if not self.show_preview.get():
+            return
+        paths = self._selected_paths()
+        if not paths:
+            self.preview_var.set("")
+            return
+        p = Path(paths[0])
+        try:
+            st = p.stat()
+        except OSError:
+            self.preview_var.set(f"{p.name} — unavailable")
+            return
+        if p.is_dir():
+            kind, size_txt = "Folder", "…"
+        else:
+            kind = (p.suffix.lstrip(".").upper() + " file") if p.suffix else "File"
+            size_txt = human_size(st.st_size)
+        meta = (f"{p.name}   •   {kind}   •   {size_txt}   •   "
+                f"modified {time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime))}")
+        snippet = ""
+        if not p.is_dir() and 0 < st.st_size <= 1_000_000:
+            try:
+                text = p.read_bytes()[:4096].decode("utf-8")
+                snippet = "\n" + text[:1500].replace("\r", "")
+            except (OSError, UnicodeDecodeError):
+                snippet = ""  # binary file — metadata only
+        self.preview_var.set(meta + snippet)
+
+    # ---------------------------------------------------- state persistence -- #
+    def _apply_saved_state(self) -> None:
+        s = self._settings
+        if s.get("geometry"):
+            try:
+                self.root.geometry(s["geometry"])
+            except Exception:
+                pass
+        self.show_hidden.set(bool(s.get("show_hidden", False)))
+        last = s.get("last_dir")
+        if last and Path(last).is_dir():
+            self.current_dir = Path(last)
+            self.history = [self.current_dir]
+
+    def _restore_sort(self) -> None:
+        sort = self._settings.get("sort") or {}
+        col = sort.get("column")
+        if col in self._HEADINGS:
+            reverse = bool(sort.get("reverse", False))
+            self._apply_sort(col, reverse)
+            self._sort_col = col
+            # Next click must flip the restored direction.
+            self._sort_reverse[col] = not reverse
+
+    def _on_close(self) -> None:
+        # _sort_reverse stores the direction of the NEXT click, so the
+        # current direction is its inverse.
+        current_reverse = (not self._sort_reverse.get(self._sort_col, False)
+                           if self._sort_col else False)
+        self._settings.update({
+            "geometry": self.root.geometry(),
+            "show_hidden": self.show_hidden.get(),
+            "last_dir": str(self.current_dir),
+            "sort": {"column": self._sort_col, "reverse": current_reverse},
+        })
+        core.settings.save(self._settings)
+        self.root.destroy()
 
     def _error(self, exc: Exception) -> None:
         Messagebox.show_error(str(exc), "Error", alert=True)
