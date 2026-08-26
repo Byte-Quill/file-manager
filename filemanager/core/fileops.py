@@ -171,27 +171,42 @@ def delete_items(paths: Iterable[Path], use_trash: bool = True) -> None:
 # --------------------------------------------------------------------------- #
 # Copy / move
 # --------------------------------------------------------------------------- #
+def _transfer(
+    sources: Iterable[Path],
+    dest_dir: Path,
+    verb: str,
+    do: Callable[[Path, Path], None],
+    progress: Optional[Callable[[str], None]] = None,
+) -> None:
+    """Apply *do(src, target)* to every source, reporting all failures."""
+    failures: List[str] = []
+    for src in sources:
+        target = dest_dir / unique_name(dest_dir, src.name)
+        try:
+            if progress:
+                progress(f"{verb} {src.name}…")
+            do(src, target)
+        except (OSError, shutil.Error) as exc:
+            failures.append(f"{src} — {exc}")
+    if failures:
+        raise FileOperationError(
+            f"Some items could not be {verb.lower()}:\n" + "\n".join(failures[:10]))
+
+
 def copy_items(
     sources: Iterable[Path],
     dest_dir: Path,
     progress: Optional[Callable[[str], None]] = None,
 ) -> None:
     """Copy every item in *sources* into *dest_dir* (de-duplicating names)."""
-    failures: List[str] = []
-    for src in sources:
-        target = dest_dir / unique_name(dest_dir, src.name)
-        try:
-            if progress:
-                progress(f"Copying {src.name}…")
-            if src.is_dir():
-                shutil.copytree(src, target, symlinks=True)
-            else:
-                shutil.copy2(src, target)
-        except (OSError, shutil.Error) as exc:
-            failures.append(f"{src} — {exc}")
-    if failures:
-        raise FileOperationError(
-            "Some items could not be copied:\n" + "\n".join(failures[:10]))
+
+    def do(src: Path, target: Path) -> None:
+        if src.is_dir():
+            shutil.copytree(src, target, symlinks=True)
+        else:
+            shutil.copy2(src, target)
+
+    _transfer(sources, dest_dir, "Copying", do, progress)
 
 
 def move_items(
@@ -200,15 +215,5 @@ def move_items(
     progress: Optional[Callable[[str], None]] = None,
 ) -> None:
     """Move every item in *sources* into *dest_dir* (de-duplicating names)."""
-    failures: List[str] = []
-    for src in sources:
-        target = dest_dir / unique_name(dest_dir, src.name)
-        try:
-            if progress:
-                progress(f"Moving {src.name}…")
-            shutil.move(str(src), str(target))
-        except (OSError, shutil.Error) as exc:
-            failures.append(f"{src} — {exc}")
-    if failures:
-        raise FileOperationError(
-            "Some items could not be moved:\n" + "\n".join(failures[:10]))
+    _transfer(sources, dest_dir, "Moving",
+              lambda s, t: shutil.move(str(s), str(t)), progress)
