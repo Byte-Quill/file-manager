@@ -9,13 +9,13 @@ from pathlib import Path
 
 def human_size(num: float) -> str:
     """Convert a byte count into a human readable string (e.g. ``1.4 MB``)."""
-    for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
-        if abs(num) < 1024.0 or unit == "PB":
-            if unit == "B":
-                return f"{int(num)} {unit}"
-            return f"{num:.1f} {unit}"
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if abs(num) < 1024.0:
+            break
         num /= 1024.0
-    return f"{num:.1f} PB"
+    else:
+        unit = "PB"  # anything ≥ 1024 TB
+    return f"{int(num)} B" if unit == "B" else f"{num:.1f} {unit}"
 
 
 @dataclass
