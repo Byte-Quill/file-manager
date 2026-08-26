@@ -60,10 +60,19 @@ def get_drives() -> List[Path]:
         candidate = home / name
         if candidate.is_dir():
             roots.append(candidate)
-    # macOS / Linux volume mount points
-    for mount in ("/Volumes", "/mnt", "/media"):
-        mp = Path(mount)
-        if mp.is_dir():
-            roots.append(mp)
+    # macOS: every mounted volume appears under /Volumes.
+    volumes = Path("/Volumes")
+    if volumes.is_dir():
+        roots.append(volumes)
+    else:
+        # Linux: list the actual mounted volumes for this user instead of
+        # the bare /media and /mnt roots.
+        user = home.name
+        for base in (Path("/media") / user, Path("/run/media") / user):
+            if base.is_dir():
+                try:
+                    roots.extend(sorted(p for p in base.iterdir() if p.is_dir()))
+                except OSError:
+                    pass
     roots.append(Path("/"))
     return roots

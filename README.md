@@ -52,13 +52,20 @@ pip install -r requirements.txt
 
 `requirements.txt` includes `ttkbootstrap` (the GUI theme engine) and
 `send2trash` (so deletes go to the OS Trash instead of being permanent).
+Without `send2trash`, deletes are permanent and the app says so.
 
-# or
-python -m filemanager
 ### 2. Run
 
 ```bash
 python main.py
+# or
+python -m filemanager
+```
+
+### 3. Test
+
+```bash
+python -m unittest discover -s tests
 ```
 
 ## 🗂️ Project Structure
@@ -66,10 +73,11 @@ python main.py
 The codebase is organized into two cleanly separated layers:
 
 ```
-user/
+file-manager/
 ├── main.py                      # Entry point (thin wrapper)
 ├── requirements.txt
 ├── README.md
+├── tests/                       # Core-layer unit tests (stdlib unittest)
 └── filemanager/
     ├── __init__.py              # Package docs + version
     ├── __main__.py              # Enables `python -m filemanager`
@@ -115,4 +123,5 @@ Dependency rule: `gui → core` only. `core` never imports `gui`.
 - Works on **macOS, Windows and Linux**.
 - Requires **Python 3.9+**.
 - Deleting without `send2trash` is permanent — a confirmation dialog is
-  always shown first.
+  always shown first, and it clearly states whether the delete goes to
+  the Trash or is irreversible.

@@ -9,13 +9,16 @@ from typing import List
 
 from .models import FileEntry
 
+#: Default cap on the number of results returned by :func:`search`.
+MAX_RESULTS = 1000
+
 
 def search(
     root: Path,
     pattern: str,
     recursive: bool = True,
     match_case: bool = False,
-    max_results: int = 1000,
+    max_results: int = MAX_RESULTS,
 ) -> List[FileEntry]:
     """Search for files/folders whose name matches *pattern*.
 

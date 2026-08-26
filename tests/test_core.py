@@ -1,0 +1,167 @@
+"""Core-layer tests (stdlib unittest — no extra dependencies).
+
+Run with:  python -m unittest discover -s tests
+"""
+
+import os
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from filemanager.core.cleaner import scan_for_temp_files
+from filemanager.core.errors import FileOperationError
+from filemanager.core.fileops import (
+    create_file,
+    create_folder,
+    rename_item,
+    unique_name,
+)
+from filemanager.core.info import folder_size
+from filemanager.core.models import human_size
+from filemanager.core.search import search
+
+
+class HumanSizeTest(unittest.TestCase):
+    def test_bytes(self):
+        self.assertEqual(human_size(0), "0 B")
+        self.assertEqual(human_size(1023), "1023 B")
+
+    def test_units(self):
+        self.assertEqual(human_size(1024), "1.0 KB")
+        self.assertEqual(human_size(1536), "1.5 KB")
+        self.assertEqual(human_size(1024 ** 3), "1.0 GB")
+
+
+class UniqueNameTest(unittest.TestCase):
+    def test_no_conflict(self):
+        with tempfile.TemporaryDirectory() as td:
+            self.assertEqual(unique_name(Path(td), "a.txt"), "a.txt")
+
+    def test_conflict_numbers_suffix(self):
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / "a.txt").touch()
+            self.assertEqual(unique_name(Path(td), "a.txt"), "a (1).txt")
+            (Path(td) / "a (1).txt").touch()
+            self.assertEqual(unique_name(Path(td), "a.txt"), "a (2).txt")
+
+
+class NameValidationTest(unittest.TestCase):
+    def test_rejects_bad_names(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for bad in ("", "   ", "a/b", ".", ".."):
+                with self.assertRaises(FileOperationError):
+                    create_folder(root, bad)
+                with self.assertRaises(FileOperationError):
+                    create_file(root, bad)
+            (root / "x").mkdir()
+            with self.assertRaises(FileOperationError):
+                rename_item(root / "x", "y/z")
+
+    def test_accepts_plain_name(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self.assertTrue(create_file(root, "ok.txt").exists())
+            self.assertTrue(create_folder(root, "dir").is_dir())
+
+
+class FolderSizeTest(unittest.TestCase):
+    def test_sums_tree(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "a.txt").write_bytes(b"x" * 10)
+            sub = root / "sub"
+            sub.mkdir()
+            (sub / "b.txt").write_bytes(b"y" * 20)
+            self.assertEqual(folder_size(root), 30)
+
+    def test_deep_tree_no_recursion_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            old_limit = sys.getrecursionlimit()
+            sys.setrecursionlimit(200)
+            try:
+                p = os.path.join(td, "deep")
+                os.mkdir(p)
+                for _ in range(300):
+                    p = os.path.join(p, "d")
+                    os.mkdir(p)
+                with open(os.path.join(p, "leaf"), "wb") as f:
+                    f.write(b"x" * 7)
+                self.assertEqual(folder_size(Path(td) / "deep"), 7)
+            finally:
+                sys.setrecursionlimit(old_limit)
+
+
+class SearchTest(unittest.TestCase):
+    def test_substring_and_glob(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "Report.PDF").touch()
+            (root / "notes.txt").touch()
+            names = {e.name for e in search(root, "report")}
+            self.assertEqual(names, {"Report.PDF"})
+            names = {e.name for e in search(root, "*.pdf")}
+            self.assertEqual(names, {"Report.PDF"})
+
+    def test_max_results(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for i in range(10):
+                (root / f"f{i}.tmp").touch()
+            self.assertEqual(len(search(root, ".tmp", max_results=3)), 3)
+
+
+class CleanerTest(unittest.TestCase):
+    def _scan(self, root, keys, **kw):
+        return {str(m.path.relative_to(root)): m
+                for m in scan_for_temp_files(root, keys, **kw)}
+
+    def test_hidden_empty_dirs_not_reported_when_hidden_off(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / ".hidden_empty").mkdir()
+            (root / "visible_empty").mkdir()
+            res = self._scan(root, ["empty_dirs"], include_hidden=False)
+            self.assertNotIn(".hidden_empty", res)
+            self.assertIn("visible_empty", res)
+
+    def test_hidden_empty_dirs_reported_when_hidden_on(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / ".hidden_empty").mkdir()
+            res = self._scan(root, ["empty_dirs"], include_hidden=True)
+            self.assertIn(".hidden_empty", res)
+
+    def test_case_insensitive_patterns_and_reason(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "UPPER.TMP").touch()
+            (root / "backup.BAK").touch()
+            res = self._scan(root, ["temp_files", "backup_files"])
+            self.assertEqual(res["UPPER.TMP"].reason, "*.tmp")
+            self.assertEqual(res["backup.BAK"].reason, "*.bak")
+
+    def test_matched_dir_pruned(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cache = root / "__pycache__"
+            cache.mkdir()
+            (cache / "mod.pyc").touch()
+            res = self._scan(root, ["python_cache"])
+            self.assertEqual(set(res), {"__pycache__"})
+
+    def test_protected_dirs_skipped(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            git = root / ".git"
+            git.mkdir()
+            (git / "HEAD").touch()
+            res = self._scan(root, ["temp_files", "empty_dirs"], include_hidden=True)
+            self.assertEqual(res, {})
+
+
+if __name__ == "__main__":
+    unittest.main()

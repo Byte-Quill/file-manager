@@ -14,6 +14,7 @@ from ttkbootstrap.dialogs import Messagebox
 
 from .. import core
 from ..core import FileEntry, FileOperationError
+from ..core.search import MAX_RESULTS as SEARCH_MAX_RESULTS
 from .dialogs import ask_string
 from .icons import icon_for
 
@@ -355,8 +356,10 @@ class FileManagerApp:
                     if token != self._search_token:
                         continue  # stale result from a superseded search
                     self._fill_tree(results)
+                    suffix = (" (limit reached)"
+                              if len(results) >= SEARCH_MAX_RESULTS else "")
                     self.status_var.set(
-                        f"Search “{query}” — {len(results)} result(s) in {root}")
+                        f"Search “{query}” — {len(results)} result(s) in {root}{suffix}")
                 elif kind == "error":
                     self._error(item[1])
                 elif kind == "status":
