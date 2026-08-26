@@ -180,8 +180,13 @@ class FileManagerApp:
         self.menu.add_command(label="Copy Name", command=self.copy_name)
         self.menu.add_separator()
         self.menu.add_command(label="Rename…  F2", command=self.rename_selected)
+        self.menu.add_command(label="Bulk Rename…", command=self.bulk_rename_selected)
         self.menu.add_command(label="Duplicate", command=self.duplicate_selected)
         self.menu.add_command(label="Move to Trash  ⌘⌫", command=self.delete_selected)
+        self.menu.add_separator()
+        self.menu.add_command(label="Compress to ZIP…", command=self.compress_selected)
+        self.menu.add_command(label="Extract Here", command=self.extract_selected)
+        self._extract_index = self.menu.index(END)
         self.menu.add_separator()
         self.menu.add_command(label="Properties  ⌘I", command=self.show_properties)
 
@@ -342,6 +347,10 @@ class FileManagerApp:
         if row and row not in self.tree.selection():
             self.tree.selection_set(row)
         if self.tree.selection():
+            sel = self._selected_paths()
+            zip_ok = len(sel) == 1 and sel[0].lower().endswith(".zip")
+            self.menu.entryconfigure(self._extract_index,
+                                     state=NORMAL if zip_ok else DISABLED)
             try:
                 self.menu.tk_popup(event.x_root, event.y_root)
             finally:
@@ -568,6 +577,71 @@ class FileManagerApp:
             self.refresh()
         except FileOperationError as exc:
             self._error(exc)
+
+    def bulk_rename_selected(self) -> None:
+        paths = [Path(p) for p in self._selected_paths()]
+        if not paths:
+            return
+        from .bulk_rename_dialog import BulkRenameDialog
+
+        dialog = BulkRenameDialog(
+            self.root, paths,
+            lambda names, p=paths: self._do_bulk_rename(p, names))
+        dialog.grab_set()
+
+    def _do_bulk_rename(self, paths: List[Path], new_names: List[str]) -> None:
+        if not paths or self._busy:
+            return
+        self._set_busy(True, f"Renaming {len(paths)} item(s)…")
+
+        def worker() -> None:
+            try:
+                core.bulk_rename(paths, new_names)
+                self.bg_queue.put(("op-done", f"Renamed {len(paths)} item(s)", False))
+            except Exception as exc:
+                self.bg_queue.put(("op-error", exc))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def compress_selected(self) -> None:
+        paths = [Path(p) for p in self._selected_paths()]
+        if not paths or self._busy:
+            return
+        default = (paths[0].stem if len(paths) == 1 else "archive") + ".zip"
+        name = ask_string(self.root, "Compress", "Archive name:", default)
+        if not name:
+            return
+        dest = self.current_dir / name
+        self._set_busy(True, f"Compressing {len(paths)} item(s)…")
+
+        def worker() -> None:
+            try:
+                core.compress_zip(paths, dest,
+                                  progress=lambda msg: self.bg_queue.put(("status", msg)))
+                self.bg_queue.put(("op-done", f"Created {dest.name}", False))
+            except Exception as exc:
+                self.bg_queue.put(("op-error", exc))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def extract_selected(self) -> None:
+        paths = [Path(p) for p in self._selected_paths()]
+        if len(paths) != 1 or self._busy:
+            return
+        archive = paths[0]
+        # Extract into a subfolder named after the archive to avoid clutter.
+        dest = self.current_dir / core.unique_name(self.current_dir, archive.stem)
+        self._set_busy(True, f"Extracting {archive.name}…")
+
+        def worker() -> None:
+            try:
+                core.extract_zip(archive, dest,
+                                 progress=lambda msg: self.bg_queue.put(("status", msg)))
+                self.bg_queue.put(("op-done", f"Extracted to {dest.name}", False))
+            except Exception as exc:
+                self.bg_queue.put(("op-error", exc))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def delete_selected(self) -> None:
         paths = self._selected_paths()
