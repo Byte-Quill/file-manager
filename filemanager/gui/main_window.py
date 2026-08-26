@@ -38,6 +38,8 @@ class FileManagerApp:
         self.bg_queue: queue.Queue = queue.Queue()
         self._search_token = 0
         self._sort_reverse: Dict[str, bool] = {}
+        self._busy = False
+        self._action_buttons: List[ttk.Button] = []
 
         self._build_ui()
         self._bind_shortcuts()
@@ -85,22 +87,21 @@ class FileManagerApp:
         actions = ttk.Frame(self.root, padding=(8, 0, 8, 4))
         actions.pack(fill=X)
 
-        ttk.Button(actions, text="➕ New Folder", bootstyle="success-outline",
-                   command=self.new_folder, takefocus=False).pack(side=LEFT, padx=(0, 6))
-        ttk.Button(actions, text="📄 New File", bootstyle="success-outline",
-                   command=self.new_file, takefocus=False).pack(side=LEFT, padx=(0, 12))
-        ttk.Button(actions, text="✂️ Cut", bootstyle="secondary-outline",
-                   command=self.cut_selected, takefocus=False).pack(side=LEFT, padx=(0, 4))
-        ttk.Button(actions, text="📋 Copy", bootstyle="secondary-outline",
-                   command=self.copy_selected, takefocus=False).pack(side=LEFT, padx=(0, 4))
-        ttk.Button(actions, text="📥 Paste", bootstyle="secondary-outline",
-                   command=self.paste, takefocus=False).pack(side=LEFT, padx=(0, 12))
-        ttk.Button(actions, text="✏️ Rename", bootstyle="warning-outline",
-                   command=self.rename_selected, takefocus=False).pack(side=LEFT, padx=(0, 4))
-        ttk.Button(actions, text="🗑️ Delete", bootstyle="danger-outline",
-                   command=self.delete_selected, takefocus=False).pack(side=LEFT, padx=(0, 12))
-        ttk.Button(actions, text="🧹 Clean Temp Files", bootstyle="info",
-                   command=self.open_cleaner, takefocus=False).pack(side=LEFT, padx=(0, 12))
+        def action_btn(text, style, command, padx):
+            btn = ttk.Button(actions, text=text, bootstyle=style,
+                             command=command, takefocus=False)
+            btn.pack(side=LEFT, padx=padx)
+            self._action_buttons.append(btn)
+            return btn
+
+        action_btn("➕ New Folder", "success-outline", self.new_folder, (0, 6))
+        action_btn("📄 New File", "success-outline", self.new_file, (0, 12))
+        action_btn("✂️ Cut", "secondary-outline", self.cut_selected, (0, 4))
+        action_btn("📋 Copy", "secondary-outline", self.copy_selected, (0, 4))
+        action_btn("📥 Paste", "secondary-outline", self.paste, (0, 12))
+        action_btn("✏️ Rename", "warning-outline", self.rename_selected, (0, 4))
+        action_btn("🗑️ Delete", "danger-outline", self.delete_selected, (0, 12))
+        action_btn("🧹 Clean Temp Files", "info", self.open_cleaner, (0, 12))
 
         ttk.Checkbutton(actions, text="Show hidden files", variable=self.show_hidden,
                         command=self.refresh, bootstyle="round-toggle",
@@ -360,6 +361,17 @@ class FileManagerApp:
                     self._error(item[1])
                 elif kind == "status":
                     self.status_var.set(item[1])
+                elif kind == "op-done":
+                    _, msg, was_cut = item
+                    if was_cut:
+                        self.clipboard = []
+                    self._set_busy(False)
+                    self.refresh()
+                    self.status_var.set(msg)
+                elif kind == "op-error":
+                    self._set_busy(False)
+                    self.refresh()
+                    self._error(item[1])
         except queue.Empty:
             pass
         self.root.after(100, self._poll_bg_queue)
@@ -417,25 +429,28 @@ class FileManagerApp:
             self.status_var.set(f"Cut {len(paths)} item(s) to clipboard")
 
     def paste(self) -> None:
-        if not self.clipboard:
+        if not self.clipboard or self._busy:
             return
         sources = [p for p in self.clipboard if p.exists()]
         if not sources:
             self.status_var.set("Clipboard items no longer exist")
             self.clipboard = []
             return
-        try:
-            if self.clipboard_cut:
-                core.move_items(sources, self.current_dir,
-                                progress=lambda msg: self.status_var.set(msg))
-                self.clipboard = []
-            else:
-                core.copy_items(sources, self.current_dir,
-                                progress=lambda msg: self.status_var.set(msg))
-            self.refresh()
-            self.status_var.set(f"Pasted {len(sources)} item(s)")
-        except FileOperationError as exc:
-            self._error(exc)
+        cut = self.clipboard_cut
+        dest = self.current_dir
+        verb = "Moving" if cut else "Copying"
+        self._set_busy(True, f"{verb} {len(sources)} item(s)…")
+
+        def worker() -> None:
+            try:
+                op = core.move_items if cut else core.copy_items
+                op(sources, dest,
+                   progress=lambda msg: self.bg_queue.put(("status", msg)))
+                self.bg_queue.put(("op-done", f"Pasted {len(sources)} item(s)", cut))
+            except Exception as exc:
+                self.bg_queue.put(("op-error", exc))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def rename_selected(self) -> None:
         paths = self._selected_paths()
@@ -465,7 +480,7 @@ class FileManagerApp:
 
     def delete_selected(self) -> None:
         paths = self._selected_paths()
-        if not paths:
+        if not paths or self._busy:
             return
         count = len(paths)
         if core.TRASH_AVAILABLE:
@@ -477,13 +492,18 @@ class FileManagerApp:
         confirm = Messagebox.yesno(prompt, "Confirm Delete", alert=True)
         if confirm != "Yes":
             return
-        try:
-            core.delete_items([Path(p) for p in paths],
-                                use_trash=core.TRASH_AVAILABLE)
-            self.refresh()
-            self.status_var.set(f"Deleted {count} item(s)")
-        except FileOperationError as exc:
-            self._error(exc)
+        targets = [Path(p) for p in paths]
+        use_trash = core.TRASH_AVAILABLE
+        self._set_busy(True, f"Deleting {count} item(s)…")
+
+        def worker() -> None:
+            try:
+                core.delete_items(targets, use_trash=use_trash)
+                self.bg_queue.put(("op-done", f"Deleted {count} item(s)", False))
+            except Exception as exc:
+                self.bg_queue.put(("op-error", exc))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def show_properties(self) -> None:
         paths = self._selected_paths()
@@ -521,6 +541,15 @@ class FileManagerApp:
         self._sort_reverse[col] = not reverse
 
     # -------------------------------------------------------------- helpers -- #
+    def _set_busy(self, busy: bool, status: Optional[str] = None) -> None:
+        """Block file operations while a background op is running."""
+        self._busy = busy
+        state = DISABLED if busy else NORMAL
+        for btn in self._action_buttons:
+            btn.configure(state=state)
+        if status:
+            self.status_var.set(status)
+
     def _select_path(self, path: Path) -> None:
         for iid in self.tree.get_children():
             if self.tree.item(iid, "tags")[0] == str(path):
