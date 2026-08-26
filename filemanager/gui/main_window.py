@@ -525,45 +525,51 @@ class FileManagerApp:
         try:
             while True:
                 item = self.bg_queue.get_nowait()
-                kind = item[0]
-                if kind == "search-results":
-                    _, token, query, root, results = item
-                    if token != self._search_token:
-                        continue  # stale result from a superseded search
-                    self._fill_tree(results)
-                    suffix = (" (limit reached)"
-                              if len(results) >= SEARCH_MAX_RESULTS else "")
-                    self.status_var.set(
-                        f"Search “{query}” — {len(results)} result(s) in {root}{suffix}")
-                elif kind == "listing":
-                    self._on_listing(item[1], item[2], item[3], item[4])
-                elif kind == "error":
-                    self._error(item[1])
-                elif kind == "status":
-                    self.status_var.set(item[1])
-                elif kind == "op-done":
-                    _, msg, was_cut = item
-                    if was_cut:
-                        self.clipboard = []
-                    self._set_busy(False)
-                    self.refresh()
-                    self.status_var.set(msg)
-                elif kind == "op-error":
-                    self._set_busy(False)
-                    self.refresh()
-                    self._error(item[1])
-                elif kind == "dir-size":
-                    _, token, iid, size = item
-                    if token != self._size_token or not self.tree.exists(iid):
-                        continue  # stale update from a previous listing
-                    tags = list(self.tree.item(iid, "tags"))
-                    tags[2] = str(size)
-                    values = self.tree.item(iid, "values")
-                    self.tree.item(iid, tags=tuple(tags),
-                                   values=(values[0], human_size(size), values[2]))
+                try:
+                    self._handle_bg_item(item)
+                except Exception:
+                    pass  # one bad message must not kill the poller
         except queue.Empty:
             pass
         self.root.after(100, self._poll_bg_queue)
+
+    def _handle_bg_item(self, item: tuple) -> None:
+        kind = item[0]
+        if kind == "search-results":
+            _, token, query, root, results = item
+            if token != self._search_token:
+                return  # stale result from a superseded search
+            self._fill_tree(results)
+            suffix = (" (limit reached)"
+                      if len(results) >= SEARCH_MAX_RESULTS else "")
+            self.status_var.set(
+                f"Search “{query}” — {len(results)} result(s) in {root}{suffix}")
+        elif kind == "listing":
+            self._on_listing(item[1], item[2], item[3], item[4])
+        elif kind == "error":
+            self._error(item[1])
+        elif kind == "status":
+            self.status_var.set(item[1])
+        elif kind == "op-done":
+            _, msg, was_cut = item
+            if was_cut:
+                self.clipboard = []
+            self._set_busy(False)
+            self.refresh()
+            self.status_var.set(msg)
+        elif kind == "op-error":
+            self._set_busy(False)
+            self.refresh()
+            self._error(item[1])
+        elif kind == "dir-size":
+            _, token, iid, size = item
+            if token != self._size_token or not self.tree.exists(iid):
+                return  # stale update from a previous listing
+            tags = list(self.tree.item(iid, "tags"))
+            tags[2] = str(size)
+            values = self.tree.item(iid, "values")
+            self.tree.item(iid, tags=tuple(tags),
+                           values=(values[0], human_size(size), values[2]))
 
     # ------------------------------------------------------------ operations #
     def new_folder(self) -> None:
