@@ -145,12 +145,8 @@ class TempMatch:
 
 def summarize(matches: Iterable[TempMatch]) -> Tuple[int, int]:
     """Return ``(count, total_size_bytes)`` for a list of matches."""
-    count = 0
-    total = 0
-    for m in matches:
-        count += 1
-        total += m.size
-    return count, total
+    ms = list(matches)
+    return len(ms), sum(m.size for m in ms)
 
 
 def _safe_folder_size(path: Path) -> int:
@@ -207,19 +203,15 @@ def scan_for_temp_files(
     matches: List[TempMatch] = []
     scanned = 0
 
-    def match_file(name: str):
-        for cat in file_cats:
-            for regex, pat in _FILE_PATTERNS.get(cat.key, ()):
+    def match_name(name: str, cats, table):
+        for cat in cats:
+            for regex, pat in table.get(cat.key, ()):
                 if regex.match(name):
                     return cat, pat
         return None
 
-    def match_dir(name: str):
-        for cat in dir_cats:
-            for regex, pat in _DIR_PATTERNS.get(cat.key, ()):
-                if regex.match(name):
-                    return cat, pat
-        return None
+    match_file = lambda name: match_name(name, file_cats, _FILE_PATTERNS)
+    match_dir = lambda name: match_name(name, dir_cats, _DIR_PATTERNS)
 
     # Iterative DFS (explicit stack) so deep trees cannot hit the
     # recursion limit.
@@ -276,7 +268,7 @@ def scan_for_temp_files(
                 try:
                     # Quick check: try to read one entry
                     with os.scandir(child_path) as it:
-                        if not any(True for _ in it):
+                        if next(it, None) is None:
                             matches.append(TempMatch(
                                 path=child_path, category=empty_cat.key,
                                 label=empty_cat.label, reason="empty folder",
