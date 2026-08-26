@@ -125,6 +125,15 @@ def bulk_rename(paths: List[Path], new_names: List[str]) -> List[Path]:
             temp.rename(final)
             results.append(final)
     except OSError as exc:
+        # Roll back everything to the original names.
+        done = {r.name for r in results}
+        for (orig, temp), name in zip(temp_map, cleaned):
+            try:
+                if name in done:
+                    (orig.parent / name).rename(temp)
+                temp.rename(orig)
+            except OSError:
+                pass
         raise FileOperationError(f"Bulk rename failed:\n{exc}")
     return results
 
