@@ -185,12 +185,15 @@ class CleanerDialog(ttk.Toplevel):
         try:
             while True:
                 msg = self._msg_queue.get_nowait()
-                if msg[0] == "progress":
-                    self.summary_var.set(f"Scanned {msg[1]} items…")
-                elif msg[0] == "done":
-                    self._scan_done(msg[1], msg[2])
-                elif msg[0] == "deleted":
-                    self._deletion_done(msg[1], msg[2])
+                try:
+                    if msg[0] == "progress":
+                        self.summary_var.set(f"Scanned {msg[1]} items…")
+                    elif msg[0] == "done":
+                        self._scan_done(msg[1], msg[2])
+                    elif msg[0] == "deleted":
+                        self._deletion_done(msg[1], msg[2])
+                except Exception:
+                    pass  # one bad message must not kill the poller
         except queue.Empty:
             pass
         if self.winfo_exists():
