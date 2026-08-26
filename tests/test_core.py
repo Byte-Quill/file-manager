@@ -228,6 +228,33 @@ class BulkRenameTest(unittest.TestCase):
                 bulk_rename([a], ["c.txt"])
 
 
+class PartialFailureTest(unittest.TestCase):
+    def test_delete_reports_all_failures(self):
+        from filemanager.core.fileops import delete_items
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gone = root / "gone.txt"
+            gone.write_text("x")
+            locked = root / "locked" / "sub"  # nonexistent parent fails
+            with self.assertRaises(FileOperationError) as ctx:
+                delete_items([gone, locked], use_trash=False)
+            self.assertFalse(gone.exists())  # deletable item still deleted
+            self.assertIn("locked", str(ctx.exception))
+
+    def test_copy_continues_after_failure(self):
+        from filemanager.core.fileops import copy_items
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            src = root / "src"
+            src.mkdir()
+            (src / "ok.txt").write_text("ok")
+            dest = root / "dest"
+            dest.mkdir()
+            with self.assertRaises(FileOperationError):
+                copy_items([root / "missing.txt", src / "ok.txt"], dest)
+            self.assertTrue((dest / "ok.txt").exists())
+
+
 class SettingsTest(unittest.TestCase):
     def test_roundtrip(self):
         from filemanager.core import settings
