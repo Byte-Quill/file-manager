@@ -9,20 +9,31 @@ Python 3, Tkinter and [ttkbootstrap](https://ttkbootstrap.readthedocs.io/).
 ## ✨ Features
 
 - **Browse** files and folders in a sortable, icon-rich list view
-- **Places sidebar** — Home, Desktop, Documents, Downloads, mounted volumes
-- **Navigation** — back / forward history, parent folder, editable path bar
+- **Places sidebar** — Home, Desktop, Documents, Downloads, mounted
+  volumes and **recent folders**
+- **Navigation** — back / forward history, parent folder, editable path
+  bar, **clickable breadcrumb bar**, **type-ahead** (start typing to jump
+  to a file)
 - **Search** — live name search (substring or `*`/`?` globs), recursive
 - **File operations**
   - Create folders & files
   - Cut / Copy / Paste (with automatic name de-duplication)
-  - Rename, Duplicate
+  - Rename, **Bulk Rename** (edit many names at once, live validation,
+    supports swaps), Duplicate
   - Delete (moves to the OS Trash when `send2trash` is installed)
-- **Open with OS default app** and **Reveal in Finder / Explorer**
+  - **Compress to ZIP / Extract ZIP** (stdlib-only, zip-slip safe)
+  - **Copy Path / Copy Name** to clipboard
+- **Open with OS default app**, **Reveal in Finder / Explorer** and
+  **Open Terminal Here**
+- **Preview panel** — metadata plus a text snippet for small files
+- **Folder sizes** computed lazily in the background
 - **Properties dialog** — size, dates, permissions
 - **🧹 Temp File Cleaner** — scans a folder tree for junk (`.DS_Store`,
   `*.tmp`, `__pycache__`, backups, caches, empty folders…), previews matches
   by category with sizes, and safely deletes selected items to the Trash
 - **Show / hide hidden files** toggle
+- **Remembers your state** — window size, last folder, sort order,
+  hidden-files toggle and recent folders persist between sessions
 - **Keyboard shortcuts** (⌘/Ctrl variants both supported)
 
 | Shortcut | Action |
@@ -36,7 +47,13 @@ Python 3, Tkinter and [ttkbootstrap](https://ttkbootstrap.readthedocs.io/).
 | `⌘/Ctrl + L` | Focus path bar |
 | `⌘/Ctrl + R` | Refresh |
 | `⌘/Ctrl + Shift + K` | Open Temp File Cleaner |
+| `⌘/Ctrl + Shift + C` | Copy path(s) to clipboard |
+| `F2` | Rename selected item |
+| `Delete` | Delete (to Trash) |
+| `Escape` | Clear search / selection |
+| `Alt + ← / → / ↑` | Back / Forward / Up |
 | `Enter` / double-click | Open item |
+| type letters in the list | Jump to matching entry |
 
 ## 🚀 Getting Started
 
@@ -88,10 +105,12 @@ file-manager/
     │   ├── errors.py            # FileOperationError
     │   ├── models.py            # FileEntry dataclass, human_size()
     │   ├── filesystem.py        # Directory listing, places/drives
-    │   ├── fileops.py           # Create / rename / delete / copy / move
+    │   ├── fileops.py           # Create / rename / bulk rename / delete / copy / move
     │   ├── search.py            # Recursive name search engine
     │   ├── info.py              # Folder sizes, property metadata
-    │   ├── osintegration.py     # Open with default app, reveal in Finder
+    │   ├── archive.py           # ZIP compress / extract (stdlib)
+    │   ├── osintegration.py     # Open / reveal / terminal
+    │   ├── settings.py          # JSON settings store
     │   └── cleaner.py           # Temp-file categories + scan engine
     │
     └── gui/                     # 🎨 All ttkbootstrap/Tkinter code
@@ -99,6 +118,7 @@ file-manager/
         ├── icons.py             # File-type icon map
         ├── dialogs.py           # Reusable dialogs (text input)
         ├── main_window.py       # Main File Manager window
+        ├── bulk_rename_dialog.py # Bulk rename with live validation
         └── cleaner_dialog.py    # Temp File Cleaner dialog
 ```
 
