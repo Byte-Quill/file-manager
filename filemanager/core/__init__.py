@@ -16,11 +16,13 @@ osintegration Open with default app, reveal in Finder/Explorer
 cleaner       Temp-file categories + scan engine
 """
 
-from . import cleaner
+from . import cleaner, settings
+from .archive import compress_zip, extract_zip
 from .errors import FileOperationError
 from .filesystem import get_drives, list_directory
 from .fileops import (
     TRASH_AVAILABLE,
+    bulk_rename,
     copy_items,
     create_file,
     create_folder,
@@ -31,11 +33,16 @@ from .fileops import (
 )
 from .info import folder_size, item_info
 from .models import FileEntry, human_size
-from .osintegration import open_in_system, reveal_in_finder
+from .osintegration import open_in_system, open_terminal, reveal_in_finder
 from .search import search
 
 __all__ = [
     "FileOperationError",
+    "compress_zip",
+    "extract_zip",
+    "bulk_rename",
+    "open_terminal",
+    "settings",
     "FileEntry",
     "human_size",
     "get_drives",

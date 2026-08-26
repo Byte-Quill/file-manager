@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import os
 import shutil
+import uuid
 from pathlib import Path
-from typing import Callable, Iterable, Optional
+from typing import Callable, Iterable, List, Optional
 
 from .errors import FileOperationError
 
@@ -78,6 +79,54 @@ def rename_item(path: Path, new_name: str) -> Path:
     except OSError as exc:
         raise FileOperationError(f"Cannot rename:\n{path}\n{exc}")
     return target
+
+
+def bulk_rename(paths: List[Path], new_names: List[str]) -> List[Path]:
+    """Rename several items at once.
+
+    Uses a two-phase rename (via unique temporary names) so swaps and
+    chained renames (a→b, b→a) work without collisions.
+    Returns the list of new paths in input order.
+    """
+    if len(paths) != len(new_names):
+        raise FileOperationError("Bulk rename: path/name count mismatch.")
+    cleaned = [_validate_name(n, "New") for n in new_names]
+    if len(set(cleaned)) != len(cleaned):
+        raise FileOperationError("Bulk rename: duplicate target names.")
+
+    # Targets must not collide with existing items outside the rename set.
+    existing = {p.resolve() for p in paths if p.exists()}
+    for path, name in zip(paths, cleaned):
+        target = path.parent / name
+        if target.exists() and target.resolve() not in existing:
+            raise FileOperationError(f"Already exists:\n{target}")
+
+    # Phase 1: move everything to unique temp names.
+    temp_map: List[tuple] = []
+    try:
+        for path in paths:
+            temp = path.parent / f".fm-rename-{uuid.uuid4().hex}"
+            path.rename(temp)
+            temp_map.append((path, temp))
+    except OSError as exc:
+        # Roll back whatever was already moved.
+        for orig, temp in temp_map:
+            try:
+                temp.rename(orig)
+            except OSError:
+                pass
+        raise FileOperationError(f"Bulk rename failed:\n{exc}")
+
+    # Phase 2: temp names to final names.
+    results: List[Path] = []
+    try:
+        for (orig, temp), name in zip(temp_map, cleaned):
+            final = orig.parent / name
+            temp.rename(final)
+            results.append(final)
+    except OSError as exc:
+        raise FileOperationError(f"Bulk rename failed:\n{exc}")
+    return results
 
 
 def delete_items(paths: Iterable[Path], use_trash: bool = True) -> None:

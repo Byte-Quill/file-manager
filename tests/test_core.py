@@ -11,9 +11,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from filemanager.core.archive import compress_zip, extract_zip
 from filemanager.core.cleaner import scan_for_temp_files
 from filemanager.core.errors import FileOperationError
 from filemanager.core.fileops import (
+    bulk_rename,
     create_file,
     create_folder,
     rename_item,
@@ -161,6 +163,83 @@ class CleanerTest(unittest.TestCase):
             (git / "HEAD").touch()
             res = self._scan(root, ["temp_files", "empty_dirs"], include_hidden=True)
             self.assertEqual(res, {})
+
+
+class ArchiveTest(unittest.TestCase):
+    def test_roundtrip_files_and_folders(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "a.txt").write_text("hello")
+            sub = root / "sub"
+            sub.mkdir()
+            (sub / "b.txt").write_text("world")
+
+            archive = compress_zip([root / "a.txt", sub], root / "out.zip")
+            self.assertTrue(archive.exists())
+
+            dest = root / "extracted"
+            extract_zip(archive, dest)
+            self.assertEqual((dest / "a.txt").read_text(), "hello")
+            self.assertEqual((dest / "sub" / "b.txt").read_text(), "world")
+
+    def test_bad_zip_raises(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            fake = root / "fake.zip"
+            fake.write_text("not a zip")
+            with self.assertRaises(FileOperationError):
+                extract_zip(fake, root / "out")
+
+
+class BulkRenameTest(unittest.TestCase):
+    def test_simple_and_swap(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            a = root / "a.txt"
+            b = root / "b.txt"
+            a.write_text("A")
+            b.write_text("B")
+            # swap names — only works with two-phase rename
+            res = bulk_rename([a, b], ["b.txt", "a.txt"])
+            self.assertEqual(res[0].read_text(), "A")
+            self.assertEqual(res[1].read_text(), "B")
+            self.assertEqual((root / "a.txt").read_text(), "B")
+
+    def test_rejects_duplicates_and_bad_names(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            a = root / "a.txt"
+            b = root / "b.txt"
+            a.touch()
+            b.touch()
+            with self.assertRaises(FileOperationError):
+                bulk_rename([a, b], ["same.txt", "same.txt"])
+            with self.assertRaises(FileOperationError):
+                bulk_rename([a], ["x/y"])
+
+    def test_rejects_collision_with_outsider(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            a = root / "a.txt"
+            outsider = root / "c.txt"
+            a.touch()
+            outsider.touch()
+            with self.assertRaises(FileOperationError):
+                bulk_rename([a], ["c.txt"])
+
+
+class SettingsTest(unittest.TestCase):
+    def test_roundtrip(self):
+        from filemanager.core import settings
+        with tempfile.TemporaryDirectory() as td:
+            fake = Path(td) / "settings.json"
+            import unittest.mock as mock
+            with mock.patch.object(settings, "settings_path", return_value=fake):
+                settings.save({"recent": ["/tmp"], "geometry": "100x100"})
+                self.assertEqual(settings.load()["recent"], ["/tmp"])
+            with mock.patch.object(settings, "settings_path",
+                                   return_value=Path(td) / "missing.json"):
+                self.assertEqual(settings.load(), {})
 
 
 if __name__ == "__main__":
