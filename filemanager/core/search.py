@@ -44,6 +44,7 @@ def search(
         for entry in entries:
             if len(results) >= max_results:
                 return
+            is_dir = entry.is_dir(follow_symlinks=False)
             if matches(entry.name):
                 try:
                     st = entry.stat()
@@ -51,14 +52,14 @@ def search(
                         FileEntry(
                             name=entry.name,
                             path=Path(entry.path),
-                            is_dir=entry.is_dir(follow_symlinks=False),
-                            size=0 if entry.is_dir(follow_symlinks=False) else st.st_size,
+                            is_dir=is_dir,
+                            size=0 if is_dir else st.st_size,
                             modified=st.st_mtime,
                         )
                     )
                 except OSError:
                     pass
-            if recursive and entry.is_dir(follow_symlinks=False) and not entry.is_symlink():
+            if recursive and is_dir and not entry.is_symlink():
                 walk(Path(entry.path))
 
     walk(root)

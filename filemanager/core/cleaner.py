@@ -20,7 +20,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, List, Optional, Set, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 from .errors import FileOperationError
 from .info import folder_size
@@ -108,20 +108,20 @@ PROTECTED_DIRS = frozenset({".git", ".svn", ".hg"})
 
 
 # Pre-compile fnmatch patterns to regex for faster matching
-def _compile_patterns(patterns: Tuple[str, ...]) -> List[re.Pattern]:
-    """Convert fnmatch patterns to compiled regex (case-insensitive)."""
-    return [re.compile(fnmatch.translate(p), re.IGNORECASE) for p in patterns]
+def _compile_patterns(patterns: Tuple[str, ...]) -> List[Tuple[re.Pattern, str]]:
+    """Convert fnmatch patterns to (case-insensitive regex, original pattern)."""
+    return [(re.compile(fnmatch.translate(p), re.IGNORECASE), p) for p in patterns]
 
 
 # Pre-compiled pattern regexes for each category
-_FILE_PATTERN_REGEX: dict[str, List[re.Pattern]] = {}
-_DIR_PATTERN_REGEX: dict[str, List[re.Pattern]] = {}
+_FILE_PATTERNS: Dict[str, List[Tuple[re.Pattern, str]]] = {}
+_DIR_PATTERNS: Dict[str, List[Tuple[re.Pattern, str]]] = {}
 
 for cat in CATEGORIES:
     if cat.file_patterns:
-        _FILE_PATTERN_REGEX[cat.key] = _compile_patterns(cat.file_patterns)
+        _FILE_PATTERNS[cat.key] = _compile_patterns(cat.file_patterns)
     if cat.dir_patterns:
-        _DIR_PATTERN_REGEX[cat.key] = _compile_patterns(cat.dir_patterns)
+        _DIR_PATTERNS[cat.key] = _compile_patterns(cat.dir_patterns)
 
 
 # --------------------------------------------------------------------------- #
@@ -208,19 +208,17 @@ def scan_for_temp_files(
     scanned = 0
 
     def match_file(name: str):
-        low = name.lower()
         for cat in file_cats:
-            for regex in _FILE_PATTERN_REGEX.get(cat.key, []):
-                if regex.match(low):
-                    return cat, cat.file_patterns[_FILE_PATTERN_REGEX[cat.key].index(regex)]
+            for regex, pat in _FILE_PATTERNS.get(cat.key, ()):
+                if regex.match(name):
+                    return cat, pat
         return None
 
     def match_dir(name: str):
-        low = name.lower()
         for cat in dir_cats:
-            for regex in _DIR_PATTERN_REGEX.get(cat.key, []):
-                if regex.match(low):
-                    return cat, cat.dir_patterns[_DIR_PATTERN_REGEX[cat.key].index(regex)]
+            for regex, pat in _DIR_PATTERNS.get(cat.key, ()):
+                if regex.match(name):
+                    return cat, pat
         return None
 
     def walk(directory: Path) -> None:

@@ -16,6 +16,7 @@ osintegration Open with default app, reveal in Finder/Explorer
 cleaner       Temp-file categories + scan engine
 """
 
+from . import cleaner
 from .errors import FileOperationError
 from .filesystem import get_drives, list_directory
 from .fileops import (
@@ -32,18 +33,6 @@ from .info import folder_size, item_info
 from .models import FileEntry, human_size
 from .osintegration import open_in_system, reveal_in_finder
 from .search import search
-
-# Lazy import for heavy modules - use importlib to avoid recursion
-import importlib
-_cleaner_module = None
-
-def __getattr__(name: str):
-    global _cleaner_module
-    if name == "cleaner":
-        if _cleaner_module is None:
-            _cleaner_module = importlib.import_module(".cleaner", __name__)
-        return _cleaner_module
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
     "FileOperationError",
