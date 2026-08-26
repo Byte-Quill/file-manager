@@ -19,6 +19,7 @@ cleaner       Temp-file categories + scan engine
 from .errors import FileOperationError
 from .filesystem import get_drives, list_directory
 from .fileops import (
+    TRASH_AVAILABLE,
     copy_items,
     create_file,
     create_folder,
@@ -50,6 +51,7 @@ __all__ = [
     "human_size",
     "get_drives",
     "list_directory",
+    "TRASH_AVAILABLE",
     "copy_items",
     "create_file",
     "create_folder",

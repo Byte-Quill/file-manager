@@ -268,6 +268,11 @@ def scan_for_temp_files(
                     reason=pat, is_dir=True, size=_safe_folder_size(child_path)))
                 continue  # prune: reported once, not descended into
 
+            # Skip hidden directories if not included — before the empty-dir
+            # check so hidden empty folders are never reported either.
+            if name.startswith(".") and not include_hidden:
+                continue
+
             # Check for empty directories
             if empty_cat is not None:
                 try:
@@ -281,10 +286,6 @@ def scan_for_temp_files(
                             continue  # nothing inside to scan
                 except OSError:
                     pass
-
-            # Skip hidden directories if not included
-            if name.startswith(".") and not include_hidden:
-                continue
 
             # Recurse into subdirectory
             if recursive:

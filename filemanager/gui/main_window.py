@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import queue
+import sys
 import threading
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
@@ -35,6 +36,8 @@ class FileManagerApp:
         self.clipboard_cut = False
         self.search_mode = False
         self.bg_queue: queue.Queue = queue.Queue()
+        self._search_token = 0
+        self._sort_reverse: Dict[str, bool] = {}
 
         self._build_ui()
         self._bind_shortcuts()
@@ -140,9 +143,11 @@ class FileManagerApp:
 
         self.tree.bind("<Double-1>", self._on_double_click)
         self.tree.bind("<Return>", self._on_double_click)
-        self.tree.bind("<Button-2>", self._on_context_menu)   # macOS right-click
         self.tree.bind("<Button-3>", self._on_context_menu)
         self.tree.bind("<Control-Button-1>", self._on_context_menu)
+        if sys.platform == "darwin":
+            # On macOS Button-2 is right-click; on Linux it is middle-click.
+            self.tree.bind("<Button-2>", self._on_context_menu)
 
         self._build_context_menu()
 
@@ -231,15 +236,15 @@ class FileManagerApp:
 
     def _fill_tree(self, entries: List[FileEntry]) -> None:
         self.tree.delete(*self.tree.get_children())
-        # Batch insert: build all values first, then insert in one pass
-        # This reduces UI redraw overhead significantly for large directories
         for entry in entries:
             self.tree.insert(
                 "", END,
                 values=(f"{icon_for(entry)}  {entry.name}",
                         entry.size_display,
                         entry.modified_display),
-                tags=(str(entry.path), "dir" if entry.is_dir else "file"),
+                # Extra tags carry raw values so sorting stays correct.
+                tags=(str(entry.path), "dir" if entry.is_dir else "file",
+                      str(entry.size), str(entry.modified)),
             )
 
     def _update_nav_buttons(self) -> None:
@@ -323,13 +328,17 @@ class FileManagerApp:
         if not query or query == "Search…":
             return
         self.search_mode = True
-        self.status_var.set(f"Searching for “{query}” in {self.current_dir}…")
+        # Capture state on the UI thread; the worker must not read live attrs.
+        root = self.current_dir
+        self._search_token += 1
+        token = self._search_token
+        self.status_var.set(f"Searching for “{query}” in {root}…")
         self.root.update_idletasks()
 
         def worker() -> None:
             try:
-                results = core.search(self.current_dir, query)
-                self.bg_queue.put(("search-results", query, results))
+                results = core.search(root, query)
+                self.bg_queue.put(("search-results", token, query, root, results))
             except Exception as exc:  # pragma: no cover
                 self.bg_queue.put(("error", exc))
 
@@ -341,10 +350,12 @@ class FileManagerApp:
                 item = self.bg_queue.get_nowait()
                 kind = item[0]
                 if kind == "search-results":
-                    _, query, results = item
+                    _, token, query, root, results = item
+                    if token != self._search_token:
+                        continue  # stale result from a superseded search
                     self._fill_tree(results)
                     self.status_var.set(
-                        f"Search “{query}” — {len(results)} result(s) in {self.current_dir}")
+                        f"Search “{query}” — {len(results)} result(s) in {root}")
                 elif kind == "error":
                     self._error(item[1])
                 elif kind == "status":
@@ -457,14 +468,18 @@ class FileManagerApp:
         if not paths:
             return
         count = len(paths)
-        confirm = Messagebox.yesno(
-            f"Move {count} item(s) to Trash?\n\n(Shift+Delete bypasses the trash "
-            f"only if send2trash is not installed.)",
-            "Confirm Delete", alert=True)
+        if core.TRASH_AVAILABLE:
+            prompt = (f"Move {count} item(s) to the Trash?\n\n"
+                      f"You can restore them from the Trash later.")
+        else:
+            prompt = (f"Permanently delete {count} item(s)?\n\n"
+                      f"send2trash is not installed, so this CANNOT be undone.")
+        confirm = Messagebox.yesno(prompt, "Confirm Delete", alert=True)
         if confirm != "Yes":
             return
         try:
-            core.delete_items([Path(p) for p in paths], use_trash=True)
+            core.delete_items([Path(p) for p in paths],
+                                use_trash=core.TRASH_AVAILABLE)
             self.refresh()
             self.status_var.set(f"Deleted {count} item(s)")
         except FileOperationError as exc:
@@ -490,20 +505,19 @@ class FileManagerApp:
 
     # -------------------------------------------------------------- sorting -- #
     def _sort_column(self, col: str) -> None:
-        items = [(self.tree.set(iid, col), iid) for iid in self.tree.get_children()]
-
-        def key(pair):
-            val = pair[0]
+        def key(iid: str):
+            tags = self.tree.item(iid, "tags")
             if col == "size":
-                # Strip icon/spaces; "—" for folders sorts first.
-                return (0, "") if val == "—" else (1, val)
-            return val.lower()
+                # Folders sort first, then files by raw byte count (numeric).
+                return (0, 0) if tags[1] == "dir" else (1, int(tags[2]))
+            if col == "modified":
+                return float(tags[3])
+            return self.tree.set(iid, col).lower()
 
-        reverse = getattr(self, "_sort_reverse", {}).get(col, False)
-        items.sort(key=key, reverse=reverse)
-        for index, (_val, iid) in enumerate(items):
+        reverse = self._sort_reverse.get(col, False)
+        for index, iid in enumerate(
+                sorted(self.tree.get_children(), key=key, reverse=reverse)):
             self.tree.move(iid, "", index)
-        self._sort_reverse = getattr(self, "_sort_reverse", {})
         self._sort_reverse[col] = not reverse
 
     # -------------------------------------------------------------- helpers -- #

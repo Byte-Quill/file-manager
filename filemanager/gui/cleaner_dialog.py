@@ -263,10 +263,13 @@ class CleanerDialog(ttk.Toplevel):
                                  "Temp File Cleaner", parent=self)
             return
         count, total = summarize(sel)
-        answer = Messagebox.yesno(
-            f"Move {count} item(s) ({human_size(total)}) to the Trash?\n\n"
-            "You can restore them from the Trash if needed.",
-            "Confirm Cleanup", parent=self, alert=True)
+        if core.TRASH_AVAILABLE:
+            prompt = (f"Move {count} item(s) ({human_size(total)}) to the Trash?\n\n"
+                      "You can restore them from the Trash if needed.")
+        else:
+            prompt = (f"Permanently delete {count} item(s) ({human_size(total)})?\n\n"
+                      "send2trash is not installed, so this CANNOT be undone.")
+        answer = Messagebox.yesno(prompt, "Confirm Cleanup", parent=self, alert=True)
         if answer != "Yes":
             return
 
@@ -280,7 +283,7 @@ class CleanerDialog(ttk.Toplevel):
                 deleted_iids.append(iid)  # already gone
                 continue
             try:
-                core.delete_items([m.path], use_trash=True)
+                core.delete_items([m.path], use_trash=core.TRASH_AVAILABLE)
                 deleted_iids.append(iid)
             except FileOperationError as exc:
                 errors.append(str(exc))

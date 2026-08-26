@@ -9,6 +9,14 @@ from typing import Callable, Iterable, Optional
 
 from .errors import FileOperationError
 
+try:
+    import send2trash as _send2trash  # optional dependency
+except ImportError:  # pragma: no cover
+    _send2trash = None
+
+#: True when deletes can go to the OS Trash instead of being permanent.
+TRASH_AVAILABLE = _send2trash is not None
+
 
 # --------------------------------------------------------------------------- #
 # Create / rename / delete
@@ -68,17 +76,22 @@ def rename_item(path: Path, new_name: str) -> Path:
 
 
 def delete_items(paths: Iterable[Path], use_trash: bool = True) -> None:
-    """Delete files/folders. Tries the OS trash first when available."""
-    for path in paths:
-        try:
-            if use_trash:
-                try:
-                    import send2trash  # optional dependency
+    """Delete files/folders. Uses the OS trash when requested and available.
 
-                    send2trash.send2trash(str(path))
-                    continue
-                except ImportError:
-                    pass
+    When *use_trash* is True but ``send2trash`` is missing or fails, the
+    operation raises instead of silently deleting permanently.
+    """
+    for path in paths:
+        if use_trash:
+            if _send2trash is None:
+                raise FileOperationError(
+                    f"Cannot move to Trash (send2trash not installed):\n{path}")
+            try:
+                _send2trash.send2trash(str(path))
+                continue
+            except Exception as exc:
+                raise FileOperationError(f"Cannot move to Trash:\n{path}\n{exc}")
+        try:
             if path.is_dir() and not path.is_symlink():
                 shutil.rmtree(path)
             else:
