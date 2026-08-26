@@ -5,6 +5,7 @@ from __future__ import annotations
 import queue
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -41,6 +42,8 @@ class FileManagerApp:
         self._sort_reverse: Dict[str, bool] = {}
         self._busy = False
         self._action_buttons: List[ttk.Button] = []
+        self._typeahead = ""
+        self._typeahead_time = 0.0
 
         self._build_ui()
         self._bind_shortcuts()
@@ -83,6 +86,10 @@ class FileManagerApp:
 
         ttk.Button(toolbar, text="🔍", width=3, bootstyle="info",
                    command=self.run_search, takefocus=False).pack(side=LEFT)
+
+        # ---- Breadcrumb bar ------------------------------------------------ #
+        self.crumb_bar = ttk.Frame(self.root, padding=(8, 0, 8, 2))
+        self.crumb_bar.pack(fill=X)
 
         # ---- Second toolbar row (actions) --------------------------------- #
         actions = ttk.Frame(self.root, padding=(8, 0, 8, 4))
@@ -147,6 +154,7 @@ class FileManagerApp:
         self.tree.bind("<Return>", self._on_double_click)
         self.tree.bind("<Button-3>", self._on_context_menu)
         self.tree.bind("<Control-Button-1>", self._on_context_menu)
+        self.tree.bind("<Key>", self._on_tree_key)
         if sys.platform == "darwin":
             # On macOS Button-2 is right-click; on Linux it is middle-click.
             self.tree.bind("<Button-2>", self._on_context_menu)
@@ -163,12 +171,15 @@ class FileManagerApp:
         self.menu = ttk.Menu(self.root, tearoff=False)
         self.menu.add_command(label="Open", command=self.open_selected)
         self.menu.add_command(label="Reveal in Finder", command=self.reveal_selected)
+        self.menu.add_command(label="Open Terminal Here", command=self.open_terminal_selected)
         self.menu.add_separator()
         self.menu.add_command(label="Cut  ⌘X", command=self.cut_selected)
         self.menu.add_command(label="Copy  ⌘C", command=self.copy_selected)
         self.menu.add_command(label="Paste  ⌘V", command=self.paste)
+        self.menu.add_command(label="Copy Path  ⌘⇧C", command=self.copy_path)
+        self.menu.add_command(label="Copy Name", command=self.copy_name)
         self.menu.add_separator()
-        self.menu.add_command(label="Rename…", command=self.rename_selected)
+        self.menu.add_command(label="Rename…  F2", command=self.rename_selected)
         self.menu.add_command(label="Duplicate", command=self.duplicate_selected)
         self.menu.add_command(label="Move to Trash  ⌘⌫", command=self.delete_selected)
         self.menu.add_separator()
@@ -200,11 +211,20 @@ class FileManagerApp:
             "<Command-bracketleft>": self.go_back,
             "<Command-bracketright>": self.go_forward,
             "<Command-Shift-k>": self.open_cleaner,
+            "<Command-Shift-c>": self.copy_path,
         }
         for seq, func in bindings.items():
             self.root.bind(seq, lambda _e, f=func: f())
             # Also bind Control- variants for Linux/Windows friendliness
             self.root.bind(seq.replace("Command", "Control"), lambda _e, f=func: f())
+
+        # Plain (non-modifier) and Alt shortcuts, same on every platform.
+        self.root.bind("<F2>", lambda _e: self.rename_selected())
+        self.root.bind("<Delete>", lambda _e: self.delete_selected())
+        self.root.bind("<Escape>", lambda _e: self._escape())
+        self.root.bind("<Alt-Left>", lambda _e: self.go_back())
+        self.root.bind("<Alt-Right>", lambda _e: self.go_forward())
+        self.root.bind("<Alt-Up>", lambda _e: self.go_up())
 
     # ------------------------------------------------------------ navigation #
     def navigate_to(self, path: Path, push_history: bool = True) -> None:
@@ -219,7 +239,23 @@ class FileManagerApp:
             self.history.append(path)
             self.history_index = len(self.history) - 1
         self.path_var.set(str(path))
+        self._update_breadcrumbs()
         self.refresh()
+
+    def _update_breadcrumbs(self) -> None:
+        """Rebuild the clickable path segment bar for the current folder."""
+        for child in self.crumb_bar.winfo_children():
+            child.destroy()
+        parts = self.current_dir.parts or ("/",)
+        acc = Path(parts[0])
+        for i, part in enumerate(parts):
+            if i > 0:
+                acc = acc / part
+                ttk.Label(self.crumb_bar, text="›").pack(side=LEFT)
+            target = acc
+            ttk.Button(self.crumb_bar, text=part if part != "/" else "💽 /",
+                       bootstyle="link", width=len(part) + 2, takefocus=False,
+                       command=lambda t=target: self.navigate_to(t)).pack(side=LEFT)
 
     def refresh(self) -> None:
         if self.search_mode:
@@ -271,6 +307,7 @@ class FileManagerApp:
         self.current_dir = path
         self.search_mode = False
         self.path_var.set(str(path))
+        self._update_breadcrumbs()
         self.refresh()
 
     def go_up(self) -> None:
@@ -312,6 +349,49 @@ class FileManagerApp:
 
     def _selected_paths(self) -> List[str]:
         return [self.tree.item(iid, "tags")[0] for iid in self.tree.selection()]
+
+    def _on_tree_key(self, event) -> None:
+        """Type-ahead: typing jumps to the first matching entry."""
+        if not event.char or not event.char.isprintable():
+            return
+        now = time.monotonic()
+        if now - self._typeahead_time > 0.8:
+            self._typeahead = ""
+        self._typeahead_time = now
+        self._typeahead += event.char.lower()
+        prefix = self._typeahead
+        for iid in self.tree.get_children():
+            name = Path(self.tree.item(iid, "tags")[0]).name.lower()
+            if name.startswith(prefix):
+                self.tree.selection_set(iid)
+                self.tree.see(iid)
+                break
+
+    def _escape(self) -> None:
+        """Escape clears search mode, then the search box, then selection."""
+        if self.search_mode:
+            self.search_mode = False
+            self.search_var.set("")
+            self.refresh()
+        elif self.search_var.get():
+            self.search_var.set("")
+        elif self.tree.selection():
+            self.tree.selection_remove(self.tree.selection())
+
+    def copy_path(self) -> None:
+        paths = self._selected_paths()
+        if paths:
+            self.root.clipboard_clear()
+            self.root.clipboard_append("\n".join(paths))
+            self.status_var.set(f"Copied {len(paths)} path(s) to clipboard")
+
+    def copy_name(self) -> None:
+        paths = self._selected_paths()
+        if paths:
+            names = [Path(p).name for p in paths]
+            self.root.clipboard_clear()
+            self.root.clipboard_append("\n".join(names))
+            self.status_var.set(f"Copied {len(names)} name(s) to clipboard")
 
     # --------------------------------------------------------------- search -- #
     def _search_focus_in(self, _event=None) -> None:
@@ -416,6 +496,14 @@ class FileManagerApp:
                 core.reveal_in_finder(Path(paths[0]))
             except FileOperationError as exc:
                 self._error(exc)
+
+    def open_terminal_selected(self) -> None:
+        paths = self._selected_paths()
+        target = Path(paths[0]) if paths else self.current_dir
+        try:
+            core.open_terminal(target)
+        except FileOperationError as exc:
+            self._error(exc)
 
     def copy_selected(self) -> None:
         paths = self._selected_paths()
@@ -527,6 +615,8 @@ class FileManagerApp:
         dialog.grab_set()
 
     # -------------------------------------------------------------- sorting -- #
+    _HEADINGS = {"name": "Name", "size": "Size", "modified": "Modified"}
+
     def _sort_column(self, col: str) -> None:
         def key(iid: str):
             tags = self.tree.item(iid, "tags")
@@ -542,6 +632,12 @@ class FileManagerApp:
                 sorted(self.tree.get_children(), key=key, reverse=reverse)):
             self.tree.move(iid, "", index)
         self._sort_reverse[col] = not reverse
+        # Show a direction arrow on the active heading only.
+        for c, text in self._HEADINGS.items():
+            if c == col:
+                self.tree.heading(c, text=f"{text} {'▼' if not reverse else '▲'}")
+            else:
+                self.tree.heading(c, text=text)
 
     # -------------------------------------------------------------- helpers -- #
     def _set_busy(self, busy: bool, status: Optional[str] = None) -> None:
