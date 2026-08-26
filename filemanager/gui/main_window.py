@@ -40,6 +40,7 @@ class FileManagerApp:
         self.search_mode = False
         self.bg_queue: queue.Queue = queue.Queue()
         self._search_token = 0
+        self._list_token = 0
         self._sort_reverse: Dict[str, bool] = {}
         self._busy = False
         self._action_buttons: List[ttk.Button] = []
@@ -309,10 +310,27 @@ class FileManagerApp:
         if self.search_mode:
             self.run_search()
             return
-        try:
-            entries = core.list_directory(self.current_dir, self.show_hidden.get())
-        except FileOperationError as exc:
-            self._error(exc)
+        # List on a worker thread so slow mounts never freeze the UI.
+        target = self.current_dir
+        show_hidden = self.show_hidden.get()
+        self._list_token += 1
+        token = self._list_token
+
+        def worker() -> None:
+            try:
+                entries = core.list_directory(target, show_hidden)
+                self.bg_queue.put(("listing", token, target, entries, None))
+            except Exception as exc:
+                self.bg_queue.put(("listing", token, target, [], exc))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_listing(self, token: int, target: Path,
+                    entries: List[FileEntry], error: Optional[Exception]) -> None:
+        if token != self._list_token or target != self.current_dir:
+            return  # stale listing from a superseded navigation
+        if error is not None:
+            self._error(error)
             return
         self._fill_tree(entries)
         self._start_folder_sizes()
@@ -517,6 +535,8 @@ class FileManagerApp:
                               if len(results) >= SEARCH_MAX_RESULTS else "")
                     self.status_var.set(
                         f"Search “{query}” — {len(results)} result(s) in {root}{suffix}")
+                elif kind == "listing":
+                    self._on_listing(item[1], item[2], item[3], item[4])
                 elif kind == "error":
                     self._error(item[1])
                 elif kind == "status":
