@@ -636,18 +636,12 @@ class FileManagerApp:
         cut = self.clipboard_cut
         dest = self.current_dir
         verb = "Moving" if cut else "Copying"
-        self._set_busy(True, f"{verb} {len(sources)} item(s)…")
-
-        def worker() -> None:
-            try:
-                op = core.move_items if cut else core.copy_items
-                op(sources, dest,
-                   progress=lambda msg: self.bg_queue.put(("status", msg)))
-                self.bg_queue.put(("op-done", f"Pasted {len(sources)} item(s)", cut))
-            except Exception as exc:
-                self.bg_queue.put(("op-error", exc))
-
-        threading.Thread(target=worker, daemon=True).start()
+        op = core.move_items if cut else core.copy_items
+        self._run_bg(
+            lambda: op(sources, dest,
+                       progress=lambda msg: self.bg_queue.put(("status", msg))),
+            f"Pasted {len(sources)} item(s)", was_cut=cut,
+            busy_status=f"{verb} {len(sources)} item(s)…")
 
     def rename_selected(self) -> None:
         paths = self._selected_paths()
@@ -687,18 +681,11 @@ class FileManagerApp:
         dialog.grab_set()
 
     def _do_bulk_rename(self, paths: List[Path], new_names: List[str]) -> None:
-        if not paths or self._busy:
+        if not paths:
             return
-        self._set_busy(True, f"Renaming {len(paths)} item(s)…")
-
-        def worker() -> None:
-            try:
-                core.bulk_rename(paths, new_names)
-                self.bg_queue.put(("op-done", f"Renamed {len(paths)} item(s)", False))
-            except Exception as exc:
-                self.bg_queue.put(("op-error", exc))
-
-        threading.Thread(target=worker, daemon=True).start()
+        self._run_bg(lambda: core.bulk_rename(paths, new_names),
+                     f"Renamed {len(paths)} item(s)",
+                     busy_status=f"Renaming {len(paths)} item(s)…")
 
     def compress_selected(self) -> None:
         paths = [Path(p) for p in self._selected_paths()]
@@ -709,17 +696,11 @@ class FileManagerApp:
         if not name:
             return
         dest = self.current_dir / name
-        self._set_busy(True, f"Compressing {len(paths)} item(s)…")
-
-        def worker() -> None:
-            try:
-                core.compress_zip(paths, dest,
-                                  progress=lambda msg: self.bg_queue.put(("status", msg)))
-                self.bg_queue.put(("op-done", f"Created {dest.name}", False))
-            except Exception as exc:
-                self.bg_queue.put(("op-error", exc))
-
-        threading.Thread(target=worker, daemon=True).start()
+        self._run_bg(
+            lambda: core.compress_zip(
+                paths, dest, progress=lambda msg: self.bg_queue.put(("status", msg))),
+            f"Created {dest.name}",
+            busy_status=f"Compressing {len(paths)} item(s)…")
 
     def extract_selected(self) -> None:
         paths = [Path(p) for p in self._selected_paths()]
@@ -728,17 +709,11 @@ class FileManagerApp:
         archive = paths[0]
         # Extract into a subfolder named after the archive to avoid clutter.
         dest = self.current_dir / core.unique_name(self.current_dir, archive.stem)
-        self._set_busy(True, f"Extracting {archive.name}…")
-
-        def worker() -> None:
-            try:
-                core.extract_zip(archive, dest,
-                                 progress=lambda msg: self.bg_queue.put(("status", msg)))
-                self.bg_queue.put(("op-done", f"Extracted to {dest.name}", False))
-            except Exception as exc:
-                self.bg_queue.put(("op-error", exc))
-
-        threading.Thread(target=worker, daemon=True).start()
+        self._run_bg(
+            lambda: core.extract_zip(
+                archive, dest, progress=lambda msg: self.bg_queue.put(("status", msg))),
+            f"Extracted to {dest.name}",
+            busy_status=f"Extracting {archive.name}…")
 
     def delete_selected(self) -> None:
         paths = self._selected_paths()
@@ -756,16 +731,9 @@ class FileManagerApp:
             return
         targets = [Path(p) for p in paths]
         use_trash = core.TRASH_AVAILABLE
-        self._set_busy(True, f"Deleting {count} item(s)…")
-
-        def worker() -> None:
-            try:
-                core.delete_items(targets, use_trash=use_trash)
-                self.bg_queue.put(("op-done", f"Deleted {count} item(s)", False))
-            except Exception as exc:
-                self.bg_queue.put(("op-error", exc))
-
-        threading.Thread(target=worker, daemon=True).start()
+        self._run_bg(lambda: core.delete_items(targets, use_trash=use_trash),
+                     f"Deleted {count} item(s)",
+                     busy_status=f"Deleting {count} item(s)…")
 
     def show_properties(self) -> None:
         paths = self._selected_paths()
@@ -815,6 +783,23 @@ class FileManagerApp:
                 self.tree.heading(c, text=text)
 
     # -------------------------------------------------------------- helpers -- #
+    def _run_bg(self, work, done_msg: str, was_cut: bool = False,
+               busy_status: Optional[str] = None) -> None:
+        """Run *work()* on a daemon thread; report result via the bg queue."""
+        if self._busy:
+            return
+        if busy_status:
+            self._set_busy(True, busy_status)
+
+        def worker() -> None:
+            try:
+                work()
+                self.bg_queue.put(("op-done", done_msg, was_cut))
+            except Exception as exc:
+                self.bg_queue.put(("op-error", exc))
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def _set_busy(self, busy: bool, status: Optional[str] = None) -> None:
         """Block file operations while a background op is running."""
         self._busy = busy
