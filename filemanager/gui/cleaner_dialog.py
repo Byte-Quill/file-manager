@@ -189,6 +189,8 @@ class CleanerDialog(ttk.Toplevel):
                     self.summary_var.set(f"Scanned {msg[1]} items…")
                 elif msg[0] == "done":
                     self._scan_done(msg[1], msg[2])
+                elif msg[0] == "deleted":
+                    self._deletion_done(msg[1], msg[2])
         except queue.Empty:
             pass
         if self.winfo_exists():
@@ -273,40 +275,52 @@ class CleanerDialog(ttk.Toplevel):
         if answer != "Yes":
             return
 
-        deleted_iids: List[str] = []
-        errors: List[str] = []
-        for iid in self.tree.get_children():
-            if "checked" not in self.tree.item(iid, "tags"):
-                continue
-            m = self.matches[int(iid)]
-            if not m.path.exists():
-                deleted_iids.append(iid)  # already gone
-                continue
-            try:
-                core.delete_items([m.path], use_trash=core.TRASH_AVAILABLE)
-                deleted_iids.append(iid)
-            except FileOperationError as exc:
-                errors.append(str(exc))
+        targets = [m.path for m in sel]
+        use_trash = core.TRASH_AVAILABLE
+        self.delete_btn.configure(state=DISABLED)
+        self.progress.start(12)
+        self.summary_var.set(f"Deleting {len(targets)} item(s)…")
 
-        for iid in deleted_iids:
-            self.tree.delete(iid)
+        def worker() -> None:
+            errors: List[str] = []
+            deleted: List[Path] = []
+            for path in targets:
+                if not path.exists():
+                    deleted.append(path)  # already gone
+                    continue
+                try:
+                    core.delete_items([path], use_trash=use_trash)
+                    deleted.append(path)
+                except FileOperationError as exc:
+                    errors.append(str(exc))
+            self._msg_queue.put(("deleted", deleted, errors))
 
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _deletion_done(self, deleted: List[Path], errors: List[str]) -> None:
+        self.progress.stop()
         # Row iids are stable indices into self.matches — no remapping needed.
-        remaining = [self.matches[int(i)] for i in self.tree.get_children()]
+        gone = {str(m.path) for m in self.matches}
+        for iid in list(self.tree.get_children()):
+            m = self.matches[int(iid)]
+            if m.path in deleted or not m.path.exists():
+                self.tree.delete(iid)
 
+        remaining = [self.matches[int(i)] for i in self.tree.get_children()]
         self._update_footer()
         count_left, total_left = summarize(remaining)
         self.summary_var.set(f"{count_left} item(s) remaining — {human_size(total_left)}")
         self.delete_btn.configure(state=NORMAL if remaining else DISABLED)
 
+        n = len(deleted)
         if errors:
             Messagebox.show_warning(
-                f"Deleted successfully, but {len(errors)} item(s) failed:\n\n"
+                f"Deleted {n} item(s), but {len(errors)} failed:\n\n"
                 + "\n".join(errors[:5]),
                 "Temp File Cleaner", parent=self)
         else:
             Messagebox.show_info(
-                f"Cleanup complete — {len(deleted_iids)} item(s) moved to Trash.",
+                f"Cleanup complete — {n} item(s) moved to Trash.",
                 "Temp File Cleaner", parent=self)
 
     # ---------------------------------------------------------------- misc -- #
