@@ -672,11 +672,9 @@ class FileManagerApp:
         paths = self._selected_paths()
         if not paths:
             return
-        try:
-            core.copy_items([Path(p) for p in paths], self.current_dir)
-            self.refresh()
-        except FileOperationError as exc:
-            self._error(exc)
+        self._run_bg(lambda: core.copy_items(paths, self.current_dir),
+                     f"Duplicated {len(paths)} item(s)",
+                     busy_status=f"Duplicating {len(paths)} item(s)…")
 
     def bulk_rename_selected(self) -> None:
         paths = [Path(p) for p in self._selected_paths()]
