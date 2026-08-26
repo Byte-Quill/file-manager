@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import stat
 import time
 from pathlib import Path
 
@@ -45,22 +46,19 @@ def item_info(path: Path) -> str:
     lines = [
         f"Name: {path.name}",
         f"Path: {path}",
-        f"Type: {'Folder' if path.is_dir() else (path.suffix.upper().lstrip('.') + ' file' if path.suffix else 'File')}",
     ]
     if path.is_dir():
+        lines.append("Type: Folder")
         try:
             children = list(path.iterdir())
             lines.append(f"Contains: {len(children)} item(s)")
         except OSError:
             pass
     else:
+        kind = path.suffix.upper().lstrip(".") + " file" if path.suffix else "File"
+        lines.append(f"Type: {kind}")
         lines.append(f"Size: {human_size(st.st_size)} ({st.st_size:,} bytes)")
     lines.append(f"Modified: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(st.st_mtime))}")
     lines.append(f"Accessed: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(st.st_atime))}")
-
-    mode = st.st_mode
-    perms = "".join(
-        "rwx"[i % 3] if mode & (1 << (8 - i)) else "-" for i in range(9)
-    )
-    lines.append(f"Permissions: {perms}")
+    lines.append(f"Permissions: {stat.filemode(st.st_mode)}")
     return "\n".join(lines)
