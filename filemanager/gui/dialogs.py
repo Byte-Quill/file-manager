@@ -2,39 +2,50 @@
 
 from __future__ import annotations
 
-from typing import Dict, Optional
+import tkinter
+from typing import Optional
 
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 from ttkbootstrap.dialogs import Dialog
 
 
+class _StringDialog(Dialog):
+    """Modal text-input dialog built on the documented Dialog API."""
+
+    def __init__(self, title: str, prompt: str, initial: str,
+                 parent: Optional[tkinter.Misc] = None) -> None:
+        super().__init__(parent=parent, title=title)
+        self._prompt = prompt
+        self._initial = initial
+        self.result: Optional[str] = None
+
+    def create_body(self, master: tkinter.Misc) -> None:
+        body = ttk.Frame(master, padding=16)
+        body.pack(fill=BOTH, expand=YES)
+        ttk.Label(body, text=self._prompt).pack(anchor=W, pady=(0, 6))
+        self._entry = ttk.Entry(body, width=40)
+        self._entry.insert(0, self._initial)
+        self._entry.pack(fill=X)
+        self._entry.select_range(0, END)
+        self._entry.bind("<Return>", lambda _e: self._submit())
+        self._initial_focus = self._entry
+
+    def create_buttonbox(self, master: tkinter.Misc) -> None:
+        bar = ttk.Frame(master, padding=(16, 0, 16, 12))
+        bar.pack(fill=X)
+        ttk.Button(bar, text="Cancel", bootstyle="secondary-outline",
+                   command=self.close).pack(side=RIGHT, padx=6)
+        ttk.Button(bar, text="OK", bootstyle="primary",
+                   command=self._submit).pack(side=RIGHT)
+
+    def _submit(self) -> None:
+        self.result = self._entry.get()
+        self.close()
+
+
 def ask_string(parent, title: str, prompt: str, initial: str) -> Optional[str]:
     """Show a modal text-input dialog. Returns ``None`` when cancelled."""
-    dialog = Dialog(title, parent)
-    ttk.Label(dialog, text=prompt, font=("Helvetica", 12)).pack(
-        padx=16, pady=(14, 4), anchor=W)
-    entry = ttk.Entry(dialog, font=("Helvetica", 12), width=40)
-    entry.insert(0, initial)
-    entry.pack(padx=16, pady=(0, 10), fill=X)
-    entry.select_range(0, END)
-    entry.focus_set()
-
-    result: Dict[str, Optional[str]] = {"value": None}
-
-    def ok(_e=None) -> None:
-        result["value"] = entry.get()
-        dialog.destroy()
-
-    def cancel(_e=None) -> None:
-        dialog.destroy()
-
-    entry.bind("<Return>", ok)
-    dialog.bind("<Escape>", cancel)
-    btns = ttk.Frame(dialog)
-    btns.pack(pady=(0, 12))
-    ttk.Button(btns, text="Cancel", command=cancel,
-               bootstyle="secondary-outline").pack(side=LEFT, padx=6)
-    ttk.Button(btns, text="OK", command=ok, bootstyle="primary").pack(side=LEFT, padx=6)
-    dialog.wait_window()
-    return result["value"]
+    dialog = _StringDialog(title, prompt, initial, parent=parent)
+    dialog.show()
+    return dialog.result
