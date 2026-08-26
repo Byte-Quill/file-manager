@@ -33,6 +33,27 @@ def _validate_name(name: str, kind: str) -> str:
     return name
 
 
+def _is_same_file(a: Path, b: Path) -> bool:
+    """True when *a* and *b* refer to the same existing item.
+
+    Handles case-only renames on case-insensitive filesystems, where
+    ``target.exists()`` is True because it resolves to the source itself.
+    """
+    try:
+        return os.path.samestat(a.stat(), b.stat())
+    except OSError:
+        return False
+
+
+def _inside(child: Path, ancestor: Path) -> bool:
+    """True when *child* equals or lies under *ancestor*."""
+    try:
+        child.relative_to(ancestor)
+        return True
+    except ValueError:
+        return False
+
+
 def create_folder(parent: Path, name: str) -> Path:
     """Create a new folder inside *parent* and return its path."""
     target = parent / _validate_name(name, "Folder")
@@ -72,7 +93,7 @@ def rename_item(path: Path, new_name: str) -> Path:
     """Rename *path* within its parent folder and return the new path."""
     new_name = _validate_name(new_name, "New")
     target = path.parent / new_name
-    if target.exists():
+    if target.exists() and not _is_same_file(path, target):
         raise FileOperationError(f"Already exists:\n{target}")
     try:
         path.rename(target)
@@ -179,8 +200,15 @@ def _transfer(
     progress: Optional[Callable[[str], None]] = None,
 ) -> None:
     """Apply *do(src, target)* to every source, reporting all failures."""
+    dest_dir = dest_dir.resolve()
     failures: List[str] = []
     for src in sources:
+        # Never copy/move a folder into itself or a descendant — copytree
+        # would recurse forever and fill the disk.
+        if _inside(src.resolve(), dest_dir):
+            failures.append(
+                f"{src} — cannot {verb.lower()} a folder into itself")
+            continue
         target = dest_dir / unique_name(dest_dir, src.name)
         try:
             if progress:

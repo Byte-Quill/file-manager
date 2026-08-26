@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable, Iterable, Optional
 
 from .errors import FileOperationError
+from .fileops import _inside, _validate_name
 
 
 def compress_zip(
@@ -17,6 +18,22 @@ def compress_zip(
 ) -> Path:
     """Compress files and/or folders into *dest_zip*. Returns the archive."""
     dest_zip = Path(dest_zip)
+    # The GUI passes a user-typed name; reject path separators, "." etc.
+    # so the archive cannot land outside the intended folder. The ".."
+    # check must run even for absolute paths — Path(a) / "../x" stays
+    # un-normalised and would otherwise escape via the OS.
+    if ".." in dest_zip.parts:
+        raise FileOperationError(f"Invalid archive name:\n{dest_zip}")
+    if not dest_zip.is_absolute():
+        dest_zip = dest_zip.parent / _validate_name(dest_zip.name, "Archive")
+    if dest_zip.exists():
+        raise FileOperationError(f"Already exists:\n{dest_zip}")
+    for src in sources:
+        src = Path(src)
+        if _inside(src.resolve(), dest_zip.parent.resolve()) and \
+                src.name == dest_zip.name:
+            raise FileOperationError(
+                f"Cannot compress an archive into itself:\n{dest_zip}")
     try:
         with zipfile.ZipFile(dest_zip, "w", zipfile.ZIP_DEFLATED) as zf:
             for src in sources:

@@ -255,6 +255,24 @@ class FileManagerApp:
             # Also bind Control- variants for Linux/Windows friendliness
             self.root.bind(seq.replace("Command", "Control"), lambda _e, f=func: f())
 
+        # Clipboard/delete/rename keys must NOT be global: they would hijack
+        # normal text editing in the path and search entries. Bind them to
+        # the tree only; entries keep native editing behaviour.
+        tree_only = {
+            "<Command-c>": self.copy_selected,
+            "<Command-x>": self.cut_selected,
+            "<Command-v>": self.paste,
+            "<Command-BackSpace>": self.delete_selected,
+            "<Command-Shift-c>": self.copy_path,
+        }
+        for seq, func in tree_only.items():
+            self.tree.bind(seq, lambda _e, f=func: f())
+            self.tree.bind(seq.replace("Command", "Control"),
+                           lambda _e, f=func: f())
+            self.root.unbind(seq.replace("Command", "Control"))
+            if seq != seq.replace("Command", "Control"):
+                self.root.unbind(seq)
+
         # Plain (non-modifier) and Alt shortcuts, same on every platform.
         self.root.bind("<F2>", lambda _e: self.rename_selected())
         self.root.bind("<Delete>", lambda _e: self.delete_selected())
@@ -777,7 +795,9 @@ class FileManagerApp:
                 return (0, 0) if tags[1] == "dir" else (1, int(tags[2]))
             if col == "modified":
                 return float(tags[3])
-            return self.tree.set(iid, col).lower()
+            # Sort by the real name (tags[0]), not the icon-prefixed display
+            # text — "📄 zebra.txt" would otherwise sort under "z".
+            return Path(tags[0]).name.lower()
 
         for index, iid in enumerate(
                 sorted(self.tree.get_children(), key=key, reverse=reverse)):
@@ -861,7 +881,8 @@ class FileManagerApp:
         snippet = ""
         if not p.is_dir() and 0 < st.st_size <= 1_000_000:
             try:
-                text = p.read_bytes()[:4096].decode("utf-8")
+                with p.open("rb") as fh:
+                    text = fh.read(4096).decode("utf-8")
                 snippet = "\n" + text[:1500].replace("\r", "")
             except (OSError, UnicodeDecodeError):
                 snippet = ""  # binary file — metadata only

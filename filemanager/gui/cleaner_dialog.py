@@ -303,7 +303,6 @@ class CleanerDialog(ttk.Toplevel):
     def _deletion_done(self, deleted: List[Path], errors: List[str]) -> None:
         self.progress.stop()
         # Row iids are stable indices into self.matches — no remapping needed.
-        gone = {str(m.path) for m in self.matches}
         for iid in list(self.tree.get_children()):
             m = self.matches[int(iid)]
             if m.path in deleted or not m.path.exists():

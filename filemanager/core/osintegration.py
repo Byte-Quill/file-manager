@@ -32,7 +32,7 @@ def open_terminal(path: Path) -> None:
             subprocess.Popen(["open", "-a", "Terminal", str(folder)])
         elif sys.platform.startswith("win"):
             subprocess.Popen(["cmd", "/c", "start", "cmd", "/K",
-                              f"cd /D {folder}"], shell=False)
+                              f'cd /D "{folder}"'], shell=False)
         else:
             term = next((t for t in map(shutil.which, (
                 "x-terminal-emulator", "gnome-terminal", "konsole",

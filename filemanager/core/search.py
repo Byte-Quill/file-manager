@@ -52,7 +52,9 @@ def search(
             is_dir = entry.is_dir(follow_symlinks=False)
             if matches(entry.name):
                 try:
-                    st = entry.stat()
+                    # Don't follow symlinks: keeps size/type consistent with
+                    # is_dir above and avoids hangs on symlinked network mounts.
+                    st = entry.stat(follow_symlinks=False)
                     results.append(
                         FileEntry(
                             name=entry.name,

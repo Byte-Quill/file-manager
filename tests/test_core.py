@@ -36,6 +36,10 @@ class HumanSizeTest(unittest.TestCase):
         self.assertEqual(human_size(1536), "1.5 KB")
         self.assertEqual(human_size(1024 ** 3), "1.0 GB")
 
+    def test_petabyte(self):
+        self.assertEqual(human_size(1024 ** 5), "1.0 PB")
+        self.assertEqual(human_size(2048.0 * 1024 ** 5), "2.0 EB")
+
 
 class UniqueNameTest(unittest.TestCase):
     def test_no_conflict(self):
@@ -190,6 +194,25 @@ class ArchiveTest(unittest.TestCase):
             with self.assertRaises(FileOperationError):
                 extract_zip(fake, root / "out")
 
+    def test_rejects_path_traversal_in_archive_name(self):
+        from filemanager.core.archive import compress_zip
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "a.txt").touch()
+            with self.assertRaises(FileOperationError):
+                compress_zip([root / "a.txt"], root / "../evil.zip")
+            self.assertFalse((root.parent / "evil.zip").exists())
+
+    def test_rejects_existing_archive_overwrite(self):
+        from filemanager.core.archive import compress_zip
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "a.txt").write_text("x")
+            (root / "out.zip").write_text("precious")
+            with self.assertRaises(FileOperationError):
+                compress_zip([root / "a.txt"], root / "out.zip")
+            self.assertEqual((root / "out.zip").read_text(), "precious")
+
 
 class BulkRenameTest(unittest.TestCase):
     def test_simple_and_swap(self):
@@ -226,6 +249,45 @@ class BulkRenameTest(unittest.TestCase):
             outsider.touch()
             with self.assertRaises(FileOperationError):
                 bulk_rename([a], ["c.txt"])
+
+
+class SelfCopyTest(unittest.TestCase):
+    def test_copy_folder_into_itself_fails_cleanly(self):
+        from filemanager.core.fileops import copy_items
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            src = root / "src"
+            src.mkdir()
+            (src / "f.txt").write_text("x")
+            with self.assertRaises(FileOperationError) as ctx:
+                copy_items([src], src)
+            self.assertIn("itself", str(ctx.exception))
+            # No runaway nested copies were created.
+            self.assertEqual([p.name for p in src.iterdir()], ["f.txt"])
+
+    def test_move_folder_into_descendant_fails_cleanly(self):
+        from filemanager.core.fileops import move_items
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            src = root / "src"
+            sub = src / "sub"
+            sub.mkdir(parents=True)
+            (sub / "keep.txt").write_text("keep")
+            with self.assertRaises(FileOperationError):
+                move_items([src], sub)
+            self.assertTrue((sub / "keep.txt").exists())
+
+
+class CaseRenameTest(unittest.TestCase):
+    def test_case_only_rename_allowed(self):
+        from filemanager.core.fileops import rename_item
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            f = root / "A.txt"
+            f.write_text("data")
+            target = rename_item(f, "a.txt")
+            self.assertEqual(target.name, "a.txt")
+            self.assertTrue(target.exists())
 
 
 class PartialFailureTest(unittest.TestCase):
