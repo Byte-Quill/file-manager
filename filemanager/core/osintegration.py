@@ -34,11 +34,9 @@ def open_terminal(path: Path) -> None:
             subprocess.Popen(["cmd", "/c", "start", "cmd", "/K",
                               f"cd /D {folder}"], shell=False)
         else:
-            term = (shutil.which("x-terminal-emulator")
-                    or shutil.which("gnome-terminal")
-                    or shutil.which("konsole")
-                    or shutil.which("xfce4-terminal")
-                    or shutil.which("xterm"))
+            term = next((t for t in map(shutil.which, (
+                "x-terminal-emulator", "gnome-terminal", "konsole",
+                "xfce4-terminal", "xterm")) if t), None)
             if not term:
                 raise FileOperationError("No terminal emulator found.")
             subprocess.Popen([term], cwd=str(folder))
