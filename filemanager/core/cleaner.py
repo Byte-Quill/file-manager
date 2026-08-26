@@ -221,16 +221,19 @@ def scan_for_temp_files(
                     return cat, pat
         return None
 
-    def walk(directory: Path) -> None:
-        nonlocal scanned
+    # Iterative DFS (explicit stack) so deep trees cannot hit the
+    # recursion limit.
+    stack = [root]
+    while stack:
         if should_cancel is not None and should_cancel():
-            return
+            break
+        directory = stack.pop()
 
         try:
             with os.scandir(directory) as it:
                 entries = list(it)
         except (PermissionError, OSError):
-            return
+            continue
 
         # Separate dirs and files for processing order
         dir_entries = []
@@ -243,9 +246,6 @@ def scan_for_temp_files(
 
         # Process directories first
         for entry in dir_entries:
-            if should_cancel is not None and should_cancel():
-                return
-
             name = entry.name
             child_path = Path(entry.path)
 
@@ -285,14 +285,14 @@ def scan_for_temp_files(
                 except OSError:
                     pass
 
-            # Recurse into subdirectory
+            # Queue subdirectory for scanning
             if recursive:
-                walk(child_path)
+                stack.append(child_path)
 
         # Process files
         for entry in file_entries:
             if should_cancel is not None and should_cancel():
-                return
+                break
 
             name = entry.name
             child_path = Path(entry.path)
@@ -316,6 +316,5 @@ def scan_for_temp_files(
         if progress is not None:
             progress(scanned, str(directory))
 
-    walk(root)
     matches.sort(key=lambda m: (str(m.path.parent), m.path.name.lower()))
     return matches

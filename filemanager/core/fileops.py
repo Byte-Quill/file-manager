@@ -21,11 +21,20 @@ TRASH_AVAILABLE = _send2trash is not None
 # --------------------------------------------------------------------------- #
 # Create / rename / delete
 # --------------------------------------------------------------------------- #
+def _validate_name(name: str, kind: str) -> str:
+    """Return a stripped, safe single-component name or raise."""
+    name = name.strip()
+    if not name:
+        raise FileOperationError(f"{kind} name cannot be empty.")
+    if name in (".", "..") or os.sep in name or (os.altsep and os.altsep in name):
+        raise FileOperationError(
+            f"{kind} name must be a single name without path separators:\n{name!r}")
+    return name
+
+
 def create_folder(parent: Path, name: str) -> Path:
     """Create a new folder inside *parent* and return its path."""
-    target = parent / name.strip()
-    if not name.strip():
-        raise FileOperationError("Folder name cannot be empty.")
+    target = parent / _validate_name(name, "Folder")
     if target.exists():
         raise FileOperationError(f"Already exists:\n{target}")
     try:
@@ -37,9 +46,7 @@ def create_folder(parent: Path, name: str) -> Path:
 
 def create_file(parent: Path, name: str) -> Path:
     """Create a new empty file inside *parent* and return its path."""
-    target = parent / name.strip()
-    if not name.strip():
-        raise FileOperationError("File name cannot be empty.")
+    target = parent / _validate_name(name, "File")
     if target.exists():
         raise FileOperationError(f"Already exists:\n{target}")
     try:
@@ -62,9 +69,7 @@ def unique_name(parent: Path, name: str) -> str:
 
 def rename_item(path: Path, new_name: str) -> Path:
     """Rename *path* within its parent folder and return the new path."""
-    new_name = new_name.strip()
-    if not new_name:
-        raise FileOperationError("New name cannot be empty.")
+    new_name = _validate_name(new_name, "New")
     target = path.parent / new_name
     if target.exists():
         raise FileOperationError(f"Already exists:\n{target}")

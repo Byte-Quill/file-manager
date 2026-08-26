@@ -11,20 +11,27 @@ from .models import human_size
 
 
 def folder_size(path: Path) -> int:
-    """Return the total size in bytes of everything under *path*."""
+    """Return the total size in bytes of everything under *path*.
+
+    Iterative (explicit stack) so arbitrarily deep trees cannot hit the
+    recursion limit.
+    """
     total = 0
-    try:
-        with os.scandir(path) as it:
-            for entry in it:
-                try:
-                    if entry.is_dir(follow_symlinks=False):
-                        total += folder_size(Path(entry.path))
-                    else:
-                        total += entry.stat().st_size
-                except OSError:
-                    pass
-    except OSError:
-        pass
+    stack = [path]
+    while stack:
+        current = stack.pop()
+        try:
+            with os.scandir(current) as it:
+                for entry in it:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(Path(entry.path))
+                        else:
+                            total += entry.stat().st_size
+                    except OSError:
+                        pass
+        except OSError:
+            pass
     return total
 
 

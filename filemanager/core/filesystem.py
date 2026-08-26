@@ -25,9 +25,11 @@ def list_directory(path: Path, show_hidden: bool = False) -> List[FileEntry]:
                 if not show_hidden and name.startswith("."):
                     continue
                 try:
-                    # DirEntry caches stat() results; no extra syscall
+                    # DirEntry caches stat() results; no extra syscall.
+                    # follow_symlinks=False keeps stat consistent with is_dir:
+                    # a symlink shows its own metadata, not the target's.
                     is_dir = entry.is_dir(follow_symlinks=False)
-                    st = entry.stat()
+                    st = entry.stat(follow_symlinks=False)
                     entries.append(
                         FileEntry(
                             name=name,

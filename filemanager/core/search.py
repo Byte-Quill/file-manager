@@ -32,18 +32,20 @@ def search(
             return fnmatch.fnmatch(hay, needle)
         return needle in hay
 
-    def walk(directory: Path) -> None:
-        if len(results) >= max_results:
-            return
+    # Iterative DFS (explicit stack) so deep trees cannot hit the
+    # recursion limit.
+    stack = [root]
+    while stack and len(results) < max_results:
+        directory = stack.pop()
         try:
             with os.scandir(directory) as it:
-                entries = list(it)
-                entries.sort(key=lambda e: e.name.lower())
+                entries = sorted(it, key=lambda e: e.name.lower())
         except (PermissionError, OSError):
-            return
+            continue
+        subdirs: List[Path] = []
         for entry in entries:
             if len(results) >= max_results:
-                return
+                break
             is_dir = entry.is_dir(follow_symlinks=False)
             if matches(entry.name):
                 try:
@@ -60,7 +62,7 @@ def search(
                 except OSError:
                     pass
             if recursive and is_dir and not entry.is_symlink():
-                walk(Path(entry.path))
-
-    walk(root)
+                subdirs.append(Path(entry.path))
+        # Push in reverse so the first subdirectory is visited first.
+        stack.extend(reversed(subdirs))
     return results
